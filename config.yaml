@@ -18,7 +18,7 @@ providers:
 # GCP CONFIGURATION
 # ============================================
 gcp:
-  project_id: scmlastpass-mcp-prd
+  project_id: project-fb127223-bfef-43d1-94e
   location: europe-west1
   services:
     - run.googleapis.com

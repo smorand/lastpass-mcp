@@ -4,7 +4,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -211,6 +210,39 @@ type UpdateInput struct {
 	ExpirationDate string `json:"expiration_date,omitempty" jsonschema:"New expiration date"`
 }
 
+// ShowOutput is the output schema for lastpass_show tool.
+type ShowOutput struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Type           string `json:"type"`
+	URL            string `json:"url,omitempty"`
+	Username       string `json:"username,omitempty"`
+	Password       string `json:"password,omitempty"`
+	CardholderName string `json:"cardholder_name,omitempty"`
+	CardType       string `json:"card_type,omitempty"`
+	CardNumber     string `json:"card_number,omitempty"`
+	SecurityCode   string `json:"security_code,omitempty"`
+	StartDate      string `json:"start_date,omitempty"`
+	ExpirationDate string `json:"expiration_date,omitempty"`
+	Notes          string `json:"notes,omitempty"`
+	LastModified   string `json:"last_modified,omitempty"`
+	LastTouch      string `json:"last_touch,omitempty"`
+}
+
+// CreateOutput is the output schema for lastpass_create tool.
+type CreateOutput struct {
+	Success bool   `json:"success"`
+	ID      string `json:"id,omitempty"`
+	Message string `json:"message"`
+}
+
+// UpdateOutput is the output schema for lastpass_update tool.
+type UpdateOutput struct {
+	Success bool   `json:"success"`
+	ID      string `json:"id,omitempty"`
+	Message string `json:"message"`
+}
+
 // RegisterTools registers all LastPass vault management tools with the MCP server.
 func (s *Server) RegisterTools() {
 	// lastpass_login
@@ -366,16 +398,16 @@ func (s *Server) handleSearch(ctx context.Context, req *mcp.CallToolRequest, inp
 // handleShow implements the lastpass_show MCP tool.
 func (s *Server) handleShow(ctx context.Context, req *mcp.CallToolRequest, input ShowInput) (
 	*mcp.CallToolResult,
-	json.RawMessage,
+	ShowOutput,
 	error,
 ) {
 	if input.ID == "" {
-		return nil, nil, fmt.Errorf("id is required")
+		return nil, ShowOutput{}, fmt.Errorf("id is required")
 	}
 
 	session, ok := GetSession(ctx)
 	if !ok || session == nil {
-		return nil, nil, fmt.Errorf("no active LastPass session")
+		return nil, ShowOutput{}, fmt.Errorf("no active LastPass session")
 	}
 
 	var found *lastpass.Entry
@@ -387,67 +419,58 @@ func (s *Server) handleShow(ctx context.Context, req *mcp.CallToolRequest, input
 	}
 
 	if found == nil {
-		return nil, nil, fmt.Errorf("entry with ID %s not found", input.ID)
+		return nil, ShowOutput{}, fmt.Errorf("entry with ID %s not found", input.ID)
 	}
 
-	// Build response based on entry type
-	var result map[string]interface{}
-	if found.Type == "paymentcard" {
-		result = map[string]interface{}{
-			"id":              found.ID,
-			"name":            found.Name,
-			"type":            "paymentcard",
-			"cardholder_name": found.CardholderName,
-			"card_type":       found.CardType,
-			"card_number":     found.CardNumber,
-			"security_code":   found.SecurityCode,
-			"start_date":      found.StartDate,
-			"expiration_date": found.ExpirationDate,
-			"notes":           found.Notes,
-			"last_modified":   found.LastModified,
-			"last_touch":      found.LastTouch,
-		}
+	entryType := found.Type
+	if entryType == "" {
+		entryType = "password"
+	}
+
+	out := ShowOutput{
+		ID:           found.ID,
+		Name:         found.Name,
+		Type:         entryType,
+		Notes:        found.Notes,
+		LastModified: found.LastModified,
+		LastTouch:    found.LastTouch,
+	}
+
+	if entryType == "paymentcard" {
+		out.CardholderName = found.CardholderName
+		out.CardType = found.CardType
+		out.CardNumber = found.CardNumber
+		out.SecurityCode = found.SecurityCode
+		out.StartDate = found.StartDate
+		out.ExpirationDate = found.ExpirationDate
 	} else {
-		result = map[string]interface{}{
-			"id":            found.ID,
-			"name":          found.Name,
-			"url":           found.URL,
-			"username":      found.Username,
-			"password":      found.Password,
-			"notes":         found.Notes,
-			"type":          "password",
-			"last_modified": found.LastModified,
-			"last_touch":    found.LastTouch,
-		}
+		out.URL = found.URL
+		out.Username = found.Username
+		out.Password = found.Password
 	}
 
-	data, err := json.Marshal(result)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to marshal entry: %w", err)
-	}
-
-	return nil, json.RawMessage(data), nil
+	return nil, out, nil
 }
 
 // handleCreate implements the lastpass_create MCP tool.
 func (s *Server) handleCreate(ctx context.Context, req *mcp.CallToolRequest, input CreateInput) (
 	*mcp.CallToolResult,
-	json.RawMessage,
+	CreateOutput,
 	error,
 ) {
 	if input.Type == "" {
-		return nil, nil, fmt.Errorf("type is required (password or paymentcard)")
+		return nil, CreateOutput{}, fmt.Errorf("type is required (password or paymentcard)")
 	}
 	if input.Name == "" {
-		return nil, nil, fmt.Errorf("name is required")
+		return nil, CreateOutput{}, fmt.Errorf("name is required")
 	}
 	if input.Type != "password" && input.Type != "paymentcard" {
-		return nil, nil, fmt.Errorf("type must be 'password' or 'paymentcard'")
+		return nil, CreateOutput{}, fmt.Errorf("type must be 'password' or 'paymentcard'")
 	}
 
 	session, ok := GetSession(ctx)
 	if !ok || session == nil {
-		return nil, nil, fmt.Errorf("no active LastPass session")
+		return nil, CreateOutput{}, fmt.Errorf("no active LastPass session")
 	}
 
 	entry := lastpass.Entry{
@@ -473,32 +496,31 @@ func (s *Server) handleCreate(ctx context.Context, req *mcp.CallToolRequest, inp
 
 	created, err := s.lpClient.CreateEntry(ctx, session, entry)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create entry: %w", err)
-	}
-
-	data, err := json.Marshal(created)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to marshal created entry: %w", err)
+		return nil, CreateOutput{}, fmt.Errorf("failed to create entry: %w", err)
 	}
 
 	slog.Info("lastpass_create successful", "name", input.Name, "type", input.Type)
 
-	return nil, json.RawMessage(data), nil
+	return nil, CreateOutput{
+		Success: true,
+		ID:      created.ID,
+		Message: fmt.Sprintf("Entry '%s' created successfully", created.Name),
+	}, nil
 }
 
 // handleUpdate implements the lastpass_update MCP tool.
 func (s *Server) handleUpdate(ctx context.Context, req *mcp.CallToolRequest, input UpdateInput) (
 	*mcp.CallToolResult,
-	json.RawMessage,
+	UpdateOutput,
 	error,
 ) {
 	if input.ID == "" {
-		return nil, nil, fmt.Errorf("id is required")
+		return nil, UpdateOutput{}, fmt.Errorf("id is required")
 	}
 
 	session, ok := GetSession(ctx)
 	if !ok || session == nil {
-		return nil, nil, fmt.Errorf("no active LastPass session")
+		return nil, UpdateOutput{}, fmt.Errorf("no active LastPass session")
 	}
 
 	// Find the current entry
@@ -511,7 +533,7 @@ func (s *Server) handleUpdate(ctx context.Context, req *mcp.CallToolRequest, inp
 	}
 
 	if current == nil {
-		return nil, nil, fmt.Errorf("entry with ID %s not found", input.ID)
+		return nil, UpdateOutput{}, fmt.Errorf("entry with ID %s not found", input.ID)
 	}
 
 	// Merge provided fields with existing values
@@ -556,17 +578,16 @@ func (s *Server) handleUpdate(ctx context.Context, req *mcp.CallToolRequest, inp
 
 	result, err := s.lpClient.UpdateEntry(ctx, session, updated)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to update entry: %w", err)
-	}
-
-	data, err := json.Marshal(result)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to marshal updated entry: %w", err)
+		return nil, UpdateOutput{}, fmt.Errorf("failed to update entry: %w", err)
 	}
 
 	slog.Info("lastpass_update successful", "id", input.ID)
 
-	return nil, json.RawMessage(data), nil
+	return nil, UpdateOutput{
+		Success: true,
+		ID:      result.ID,
+		Message: fmt.Sprintf("Entry '%s' updated successfully", result.Name),
+	}, nil
 }
 
 // buildPaymentCardNotes builds structured notes for a payment card entry.
