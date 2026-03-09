@@ -236,7 +236,7 @@ func (s *OAuth2Server) HandleProtectedResourceMetadata(w http.ResponseWriter, r 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(metadata)
+	_ = json.NewEncoder(w).Encode(metadata)
 }
 
 // HandleAuthorizationServerMetadata serves RFC 8414 authorization server metadata.
@@ -260,7 +260,7 @@ func (s *OAuth2Server) HandleAuthorizationServerMetadata(w http.ResponseWriter, 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(metadata)
+	_ = json.NewEncoder(w).Encode(metadata)
 }
 
 // HandleClientRegistration implements RFC 7591 Dynamic Client Registration.
@@ -312,7 +312,7 @@ func (s *OAuth2Server) HandleClientRegistration(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // HandleAuthorize handles both GET (show login page) and POST (process login) for authorization.
@@ -607,7 +607,7 @@ func (s *OAuth2Server) handleAuthorizationCodeGrant(w http.ResponseWriter, clien
 	slog.Info("token issued for client", "client_id", codeEntry.ClientID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleRefreshTokenGrant handles the refresh_token grant type.
@@ -657,7 +657,7 @@ func (s *OAuth2Server) handleRefreshTokenGrant(w http.ResponseWriter, clientID, 
 	slog.Info("token refreshed for client", "client_id", tokenMapping.ClientID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // ValidateAccessToken validates a Bearer token and returns the associated LastPass session.
@@ -727,5 +727,5 @@ func writeOAuthError(w http.ResponseWriter, errorCode, description string, statu
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }

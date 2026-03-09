@@ -23,7 +23,6 @@ const (
 // vault operations, and entry management.
 type Client struct {
 	httpClient *http.Client
-	session    *Session
 }
 
 // Session holds the authenticated session state. The DecryptionKey field
@@ -128,7 +127,7 @@ func (c *Client) Logout(ctx context.Context, session *Session) error {
 		if err != nil {
 			return fmt.Errorf("sending logout request: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("logout returned status %d", resp.StatusCode)
@@ -183,7 +182,7 @@ func (c *Client) getIterations(ctx context.Context, email string) (int, error) {
 		if err != nil {
 			return fmt.Errorf("sending iterations request: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -229,7 +228,7 @@ func (c *Client) authenticate(ctx context.Context, email, loginHash string, iter
 		if err != nil {
 			return fmt.Errorf("sending login request: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -277,7 +276,7 @@ func (c *Client) downloadAndParseVault(ctx context.Context, session *Session) er
 		if err != nil {
 			return fmt.Errorf("sending vault request: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -362,7 +361,7 @@ func (c *Client) upsertEntry(ctx context.Context, session *Session, entry Entry,
 		if err != nil {
 			return fmt.Errorf("sending upsert request: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {

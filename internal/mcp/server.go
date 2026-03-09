@@ -334,10 +334,10 @@ func (s *Server) handleSearch(ctx context.Context, req *mcp.CallToolRequest, inp
 
 	results := []SearchResultItem{}
 	for _, entry := range session.Entries {
-		// Determine entry type
-		entryType := "password"
-		if entry.URL == "http://sn" && strings.Contains(entry.Notes, "NoteType:Credit Card") {
-			entryType = "paymentcard"
+		// Use the entry's parsed type
+		entryType := entry.Type
+		if entryType == "" {
+			entryType = "password"
 		}
 
 		// Filter by type if specified
@@ -390,27 +390,20 @@ func (s *Server) handleShow(ctx context.Context, req *mcp.CallToolRequest, input
 		return nil, nil, fmt.Errorf("entry with ID %s not found", input.ID)
 	}
 
-	// Determine entry type and build response
-	entryType := "password"
-	if found.URL == "http://sn" && strings.Contains(found.Notes, "NoteType:Credit Card") {
-		entryType = "paymentcard"
-	}
-
+	// Build response based on entry type
 	var result map[string]interface{}
-	if entryType == "paymentcard" {
-		// Parse payment card fields from notes
-		cardFields := parsePaymentCardNotes(found.Notes)
+	if found.Type == "paymentcard" {
 		result = map[string]interface{}{
 			"id":              found.ID,
 			"name":            found.Name,
 			"type":            "paymentcard",
-			"cardholder_name": cardFields["Language"],
-			"card_type":       cardFields["Type"],
-			"card_number":     cardFields["Number"],
-			"security_code":   cardFields["Security Code"],
-			"start_date":      cardFields["Start Date"],
-			"expiration_date": cardFields["Expiration Date"],
-			"notes":           cardFields["Notes"],
+			"cardholder_name": found.CardholderName,
+			"card_type":       found.CardType,
+			"card_number":     found.CardNumber,
+			"security_code":   found.SecurityCode,
+			"start_date":      found.StartDate,
+			"expiration_date": found.ExpirationDate,
+			"notes":           found.Notes,
 			"last_modified":   found.LastModified,
 			"last_touch":      found.LastTouch,
 		}
@@ -457,8 +450,9 @@ func (s *Server) handleCreate(ctx context.Context, req *mcp.CallToolRequest, inp
 		return nil, nil, fmt.Errorf("no active LastPass session")
 	}
 
-	entry := &lastpass.Entry{
+	entry := lastpass.Entry{
 		Name: input.Name,
+		Type: input.Type,
 	}
 
 	if input.Type == "password" {
@@ -469,9 +463,15 @@ func (s *Server) handleCreate(ctx context.Context, req *mcp.CallToolRequest, inp
 	} else {
 		entry.URL = "http://sn"
 		entry.Notes = buildPaymentCardNotes(input)
+		entry.CardholderName = input.CardholderName
+		entry.CardType = input.CardType
+		entry.CardNumber = input.CardNumber
+		entry.SecurityCode = input.SecurityCode
+		entry.StartDate = input.StartDate
+		entry.ExpirationDate = input.ExpirationDate
 	}
 
-	created, err := s.lpClient.CreateEntry(ctx, session, *entry)
+	created, err := s.lpClient.CreateEntry(ctx, session, entry)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create entry: %w", err)
 	}
@@ -532,35 +532,26 @@ func (s *Server) handleUpdate(ctx context.Context, req *mcp.CallToolRequest, inp
 		updated.Notes = input.Notes
 	}
 
-	// Handle payment card field updates
-	entryType := "password"
-	if current.URL == "http://sn" && strings.Contains(current.Notes, "NoteType:Credit Card") {
-		entryType = "paymentcard"
-	}
-	if entryType == "paymentcard" {
-		cardFields := parsePaymentCardNotes(current.Notes)
+	// Update payment card fields directly on the entry
+	if current.Type == "paymentcard" {
 		if input.CardholderName != "" {
-			cardFields["Language"] = input.CardholderName
+			updated.CardholderName = input.CardholderName
 		}
 		if input.CardType != "" {
-			cardFields["Type"] = input.CardType
+			updated.CardType = input.CardType
 		}
 		if input.CardNumber != "" {
-			cardFields["Number"] = input.CardNumber
+			updated.CardNumber = input.CardNumber
 		}
 		if input.SecurityCode != "" {
-			cardFields["Security Code"] = input.SecurityCode
+			updated.SecurityCode = input.SecurityCode
 		}
 		if input.StartDate != "" {
-			cardFields["Start Date"] = input.StartDate
+			updated.StartDate = input.StartDate
 		}
 		if input.ExpirationDate != "" {
-			cardFields["Expiration Date"] = input.ExpirationDate
+			updated.ExpirationDate = input.ExpirationDate
 		}
-		if input.Notes != "" {
-			cardFields["Notes"] = input.Notes
-		}
-		updated.Notes = rebuildPaymentCardNotes(cardFields)
 	}
 
 	result, err := s.lpClient.UpdateEntry(ctx, session, updated)
@@ -576,19 +567,6 @@ func (s *Server) handleUpdate(ctx context.Context, req *mcp.CallToolRequest, inp
 	slog.Info("lastpass_update successful", "id", input.ID)
 
 	return nil, json.RawMessage(data), nil
-}
-
-// parsePaymentCardNotes parses the structured notes of a payment card entry.
-func parsePaymentCardNotes(notes string) map[string]string {
-	fields := make(map[string]string)
-	for _, line := range strings.Split(notes, "\n") {
-		if idx := strings.Index(line, ":"); idx > 0 {
-			key := strings.TrimSpace(line[:idx])
-			value := strings.TrimSpace(line[idx+1:])
-			fields[key] = value
-		}
-	}
-	return fields
 }
 
 // buildPaymentCardNotes builds structured notes for a payment card entry.
@@ -615,20 +593,6 @@ func buildPaymentCardNotes(input CreateInput) string {
 	}
 	if input.Notes != "" {
 		lines = append(lines, "Notes:"+input.Notes)
-	}
-	return strings.Join(lines, "\n")
-}
-
-// rebuildPaymentCardNotes rebuilds structured notes from parsed fields.
-func rebuildPaymentCardNotes(fields map[string]string) string {
-	var lines []string
-	lines = append(lines, "NoteType:Credit Card")
-	// Maintain consistent field order
-	orderedKeys := []string{"Language", "Type", "Number", "Security Code", "Start Date", "Expiration Date", "Notes"}
-	for _, key := range orderedKeys {
-		if val, ok := fields[key]; ok && val != "" {
-			lines = append(lines, key+":"+val)
-		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -675,15 +639,14 @@ func (s *Server) Run(ctx context.Context) error {
 	// Health check endpoint (not protected by auth)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	// Wrap MCP handler with authentication middleware
 	authedMCPHandler := s.authMiddleware(mcpHandler)
 
 	// MCP endpoint (protected by OAuth2 Bearer token auth)
-	mux.Handle("/mcp", authedMCPHandler)
-	mux.Handle("/mcp/", authedMCPHandler)
+	mux.Handle("/", authedMCPHandler)
 
 	slog.Info("authentication mode: OAuth2 Bearer tokens")
 

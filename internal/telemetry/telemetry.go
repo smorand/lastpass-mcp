@@ -28,7 +28,7 @@ func InitTracer(serviceName, tracePath string) (func(context.Context) error, err
 	}
 	exporter, err := stdouttrace.New(stdouttrace.WithWriter(f))
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("create exporter: %w", err)
 	}
 	tp := sdktrace.NewTracerProvider(
