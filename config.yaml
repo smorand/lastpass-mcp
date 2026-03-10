@@ -29,6 +29,7 @@ gcp:
     - iam.googleapis.com
     - dns.googleapis.com
     - compute.googleapis.com
+    - cloudkms.googleapis.com
   resources:
     cloud_run:
       name: lastpass-mcp

@@ -23,6 +23,7 @@ Creates foundational resources that must exist before the main infrastructure:
 | `state-backend.tf`    | GCS bucket for Terraform state (versioned)     |
 | `services.tf`         | GCP API enablement (Cloud Run, Secret Manager, etc.) |
 | `service-accounts.tf` | Cloud Build and Cloud Run service accounts     |
+| `kms.tf`              | KMS keyring, crypto key, IAM for state encryption |
 
 **Service accounts created:**
 - `<prefix>-cloudbuild-<env>`: Used for building Docker images
@@ -51,7 +52,7 @@ Uses the `kreuzwerker/docker` Terraform provider to:
 
 ### workload-mcp.tf Details
 - **Artifact Registry**: Docker repository for container images
-- **Cloud Run v2 Service**: Runs the MCP server container with environment variables (HOST, SECRET_NAME, BASE_URL, ENVIRONMENT, PROJECT_ID)
+- **Cloud Run v2 Service**: Runs the MCP server container with environment variables (HOST, SECRET_NAME, BASE_URL, ENVIRONMENT, PROJECT_ID, STATE_BUCKET, KMS_KEY_NAME)
 - **Domain Mapping**: Maps `lastpass.mcp.scm-platform.org` to the Cloud Run service
 - **DNS Record**: CNAME pointing to `ghs.googlehosted.com.` for managed SSL
 - **IAM**: Service account gets Secret Manager accessor role; optional public access via `allUsers` invoker role

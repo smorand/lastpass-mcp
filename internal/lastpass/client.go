@@ -51,11 +51,11 @@ type loginOK struct {
 }
 
 type loginError struct {
-	Message        string `xml:"message,attr"`
-	Cause          string `xml:"cause,attr"`
-	RetryID        string `xml:"retryid,attr"`
-	OutOfBandType  string `xml:"outofbandtype,attr"`
-	OutOfBandName  string `xml:"outofbandname,attr"`
+	Message       string `xml:"message,attr"`
+	Cause         string `xml:"cause,attr"`
+	RetryID       string `xml:"retryid,attr"`
+	OutOfBandType string `xml:"outofbandtype,attr"`
+	OutOfBandName string `xml:"outofbandname,attr"`
 }
 
 // NewClient creates a new LastPass API client with a default HTTP client.
