@@ -1,0 +1,64 @@
+# LastPass MCP Server - Infrastructure Configuration
+# Single source of truth for terraform (init and iac folders)
+# ============================================
+# GLOBAL CONFIGURATION
+# ============================================
+prefix: scmlastpass
+project_name: lastpass-mcp
+env: prd
+description: LastPass MCP Server - Standalone Go MCP server with direct LastPass API integration
+
+# ============================================
+# CLOUD PROVIDER CONFIGURATION
+# ============================================
+providers:
+  - gcp
+
+# ============================================
+# GCP CONFIGURATION
+# ============================================
+gcp:
+  project_id: project-fb127223-bfef-43d1-94e
+  location: europe-west1
+  services:
+    - run.googleapis.com
+    - secretmanager.googleapis.com
+    - cloudbuild.googleapis.com
+    - artifactregistry.googleapis.com
+    - cloudresourcemanager.googleapis.com
+    - iam.googleapis.com
+    - dns.googleapis.com
+    - compute.googleapis.com
+  resources:
+    cloud_run:
+      name: lastpass-mcp
+      region: europe-west1
+      cpu: "1"
+      memory: 256Mi
+      min_instances: 0
+      max_instances: 3
+      allow_unauthenticated: true
+    artifact_registry:
+      name: lastpass-mcp
+      format: DOCKER
+
+# ============================================
+# SECRETS CONFIGURATION
+# ============================================
+secrets:
+  oauth_credentials: scm-pwd-lastpass-oauth-creds
+
+# ============================================
+# SHARED CONFIGURATION
+# ============================================
+resources:
+  cpu: "1"
+  memory: 256Mi
+  replicas: 1
+
+parameters:
+  log_level: info
+  default_port: 8080
+  base_url: "https://lastpass.mcp.scm-platform.org"
+  domain: "lastpass.mcp.scm-platform.org"
+  dns_zone: "scm-platform-org"
