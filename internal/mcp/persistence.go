@@ -2,75 +2,79 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	kms "cloud.google.com/go/kms/apiv1"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
-	"cloud.google.com/go/storage"
+	"google.golang.org/api/iterator"
 	"lastpass-mcp/internal/lastpass"
 )
 
 const (
-	stateObjectName = "oauth2-state.json"
-	saveDebounce    = 5 * time.Second
+	saveDebounce      = 5 * time.Second
+	tokensCollection  = "tokens"
+	clientsCollection = "clients"
 )
 
+// Persistence defines the interface for OAuth2 state persistence.
+type Persistence interface {
+	Load(ctx context.Context, s *OAuth2Server) error
+	Save(ctx context.Context, s *OAuth2Server) error
+	RequestSave()
+	RunSaveLoop(ctx context.Context, s *OAuth2Server)
+	Close() error
+}
+
 // persistedSession is a wrapper around lastpass.Session that includes
-// the DecryptionKey for persistence. The key is protected by GCS IAM.
+// the DecryptionKey for persistence. The key is protected by KMS encryption.
 type persistedSession struct {
-	Email         string           `json:"email"`
-	DecryptionKey []byte           `json:"decryption_key"`
-	SessionID     string           `json:"session_id"`
-	CSRFToken     string           `json:"csrf_token"`
-	Entries       []lastpass.Entry `json:"entries"`
-	CreatedAt     time.Time        `json:"created_at"`
+	Email         string           `json:"email" firestore:"email"`
+	DecryptionKey []byte           `json:"decryption_key" firestore:"decryption_key"`
+	SessionID     string           `json:"session_id" firestore:"session_id"`
+	CSRFToken     string           `json:"csrf_token" firestore:"csrf_token"`
+	Entries       []lastpass.Entry `json:"entries" firestore:"entries"`
+	CreatedAt     time.Time        `json:"created_at" firestore:"created_at"`
 }
 
 // persistedToken represents a token mapping for persistence.
 type persistedToken struct {
-	BearerToken string           `json:"bearer_token"`
-	Session     persistedSession `json:"session"`
-	ClientID    string           `json:"client_id"`
-	CreatedAt   time.Time        `json:"created_at"`
+	BearerToken string           `json:"bearer_token" firestore:"bearer_token"`
+	Session     persistedSession `json:"session" firestore:"session"`
+	ClientID    string           `json:"client_id" firestore:"client_id"`
+	CreatedAt   time.Time        `json:"created_at" firestore:"created_at"`
 }
 
 // persistedClient represents a registered client for persistence.
 type persistedClient struct {
-	ClientID     string   `json:"client_id"`
-	ClientSecret string   `json:"client_secret"`
-	RedirectURIs []string `json:"redirect_uris"`
+	ClientID     string   `json:"client_id" firestore:"client_id"`
+	ClientSecret string   `json:"client_secret" firestore:"client_secret"`
+	RedirectURIs []string `json:"redirect_uris" firestore:"redirect_uris"`
 }
 
-// persistedState is the top-level structure saved to GCS.
-type persistedState struct {
-	Tokens  map[string]persistedToken  `json:"tokens"`
-	Clients map[string]persistedClient `json:"clients"`
-	SavedAt time.Time                  `json:"saved_at"`
-}
-
-// GCSPersistence handles saving and loading OAuth2 state to GCS.
-type GCSPersistence struct {
-	bucket     string
-	client     *storage.Client
+// FirestorePersistence handles saving and loading OAuth2 state to Firestore.
+type FirestorePersistence struct {
+	projectID  string
+	database   string
+	client     *firestore.Client
 	kmsClient  *kms.KeyManagementClient
 	kmsKeyName string
 	saveCh     chan struct{}
 }
 
-// NewGCSPersistence creates a new GCS persistence handler.
+// NewFirestorePersistence creates a new Firestore persistence handler.
 // If kmsKeyName is provided, DecryptionKey fields will be encrypted/decrypted with Cloud KMS.
-func NewGCSPersistence(ctx context.Context, bucket string, kmsKeyName string) (*GCSPersistence, error) {
-	client, err := storage.NewClient(ctx)
+func NewFirestorePersistence(ctx context.Context, projectID, database, kmsKeyName string) (*FirestorePersistence, error) {
+	client, err := firestore.NewClientWithDatabase(ctx, projectID, database)
 	if err != nil {
-		return nil, fmt.Errorf("creating GCS client: %w", err)
+		return nil, fmt.Errorf("creating Firestore client: %w", err)
 	}
 
-	p := &GCSPersistence{
-		bucket:     bucket,
+	p := &FirestorePersistence{
+		projectID:  projectID,
+		database:   database,
 		client:     client,
 		kmsKeyName: kmsKeyName,
 		saveCh:     make(chan struct{}, 1),
@@ -90,7 +94,7 @@ func NewGCSPersistence(ctx context.Context, bucket string, kmsKeyName string) (*
 }
 
 // encryptKey encrypts a DecryptionKey with Cloud KMS. Returns plaintext if KMS is not configured.
-func (p *GCSPersistence) encryptKey(ctx context.Context, plaintext []byte) ([]byte, error) {
+func (p *FirestorePersistence) encryptKey(ctx context.Context, plaintext []byte) ([]byte, error) {
 	if p.kmsClient == nil || len(plaintext) == 0 {
 		return plaintext, nil
 	}
@@ -107,7 +111,7 @@ func (p *GCSPersistence) encryptKey(ctx context.Context, plaintext []byte) ([]by
 // decryptKey decrypts a DecryptionKey with Cloud KMS. Returns ciphertext as is if KMS is not configured.
 // If decryption fails (e.g. data was stored in plaintext before KMS was enabled), the original data
 // is returned as is to support migration from plaintext to encrypted storage.
-func (p *GCSPersistence) decryptKey(ctx context.Context, ciphertext []byte) ([]byte, error) {
+func (p *FirestorePersistence) decryptKey(ctx context.Context, ciphertext []byte) ([]byte, error) {
 	if p.kmsClient == nil || len(ciphertext) == 0 {
 		return ciphertext, nil
 	}
@@ -122,38 +126,36 @@ func (p *GCSPersistence) decryptKey(ctx context.Context, ciphertext []byte) ([]b
 	return resp.Plaintext, nil
 }
 
-// Load reads the persisted state from GCS and populates the OAuth2Server maps.
-func (p *GCSPersistence) Load(ctx context.Context, s *OAuth2Server) error {
-	obj := p.client.Bucket(p.bucket).Object(stateObjectName)
-	reader, err := obj.NewReader(ctx)
-	if err != nil {
-		if err == storage.ErrObjectNotExist {
-			slog.Info("no persisted state found, starting fresh")
-			return nil
+// Load reads the persisted state from Firestore and populates the OAuth2Server maps.
+func (p *FirestorePersistence) Load(ctx context.Context, s *OAuth2Server) error {
+	tokenCount := 0
+	clientCount := 0
+
+	// Load tokens
+	tokenIter := p.client.Collection(tokensCollection).Documents(ctx)
+	defer tokenIter.Stop()
+	for {
+		doc, err := tokenIter.Next()
+		if err == iterator.Done {
+			break
 		}
-		return fmt.Errorf("reading state from GCS: %w", err)
-	}
-	defer func() { _ = reader.Close() }()
+		if err != nil {
+			return fmt.Errorf("reading tokens from Firestore: %w", err)
+		}
 
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return fmt.Errorf("reading state data: %w", err)
-	}
+		var pt persistedToken
+		if err := doc.DataTo(&pt); err != nil {
+			slog.Warn("skipping malformed token document", "id", doc.Ref.ID, "error", err)
+			continue
+		}
 
-	var state persistedState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("parsing persisted state: %w", err)
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for key, pt := range state.Tokens {
 		decryptionKey, err := p.decryptKey(ctx, pt.Session.DecryptionKey)
 		if err != nil {
-			return fmt.Errorf("decrypting key for token %s: %w", key, err)
+			return fmt.Errorf("decrypting key for token %s: %w", doc.Ref.ID, err)
 		}
-		s.tokens[key] = &TokenMapping{
+
+		s.mu.Lock()
+		s.tokens[doc.Ref.ID] = &TokenMapping{
 			BearerToken: pt.BearerToken,
 			Session: &lastpass.Session{
 				Email:         pt.Session.Email,
@@ -166,43 +168,56 @@ func (p *GCSPersistence) Load(ctx context.Context, s *OAuth2Server) error {
 			ClientID:  pt.ClientID,
 			CreatedAt: pt.CreatedAt,
 		}
+		s.mu.Unlock()
+		tokenCount++
 	}
 
-	for key, pc := range state.Clients {
-		s.clients[key] = &RegisteredClient{
+	// Load clients
+	clientIter := p.client.Collection(clientsCollection).Documents(ctx)
+	defer clientIter.Stop()
+	for {
+		doc, err := clientIter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("reading clients from Firestore: %w", err)
+		}
+
+		var pc persistedClient
+		if err := doc.DataTo(&pc); err != nil {
+			slog.Warn("skipping malformed client document", "id", doc.Ref.ID, "error", err)
+			continue
+		}
+
+		s.mu.Lock()
+		s.clients[doc.Ref.ID] = &RegisteredClient{
 			ClientID:     pc.ClientID,
 			ClientSecret: pc.ClientSecret,
 			RedirectURIs: pc.RedirectURIs,
 		}
+		s.mu.Unlock()
+		clientCount++
 	}
 
-	slog.Info("loaded persisted state", "tokens", len(state.Tokens), "clients", len(state.Clients), "saved_at", state.SavedAt)
+	slog.Info("loaded persisted state from Firestore", "tokens", tokenCount, "clients", clientCount)
 	return nil
 }
 
-// Save writes the current OAuth2Server state to GCS.
-func (p *GCSPersistence) Save(ctx context.Context, s *OAuth2Server) error {
+// Save writes the current OAuth2Server state to Firestore.
+func (p *FirestorePersistence) Save(ctx context.Context, s *OAuth2Server) error {
+	// Snapshot state under read lock
 	s.mu.RLock()
-	state := persistedState{
-		Tokens:  make(map[string]persistedToken),
-		Clients: make(map[string]persistedClient),
-		SavedAt: time.Now(),
-	}
-
+	tokenSnapshots := make(map[string]persistedToken, len(s.tokens))
 	for key, tm := range s.tokens {
 		if tm.Session == nil {
 			continue
 		}
-		encryptedKey, err := p.encryptKey(ctx, tm.Session.DecryptionKey)
-		if err != nil {
-			s.mu.RUnlock()
-			return fmt.Errorf("encrypting key for token %s: %w", key, err)
-		}
-		state.Tokens[key] = persistedToken{
+		tokenSnapshots[key] = persistedToken{
 			BearerToken: tm.BearerToken,
 			Session: persistedSession{
 				Email:         tm.Session.Email,
-				DecryptionKey: encryptedKey,
+				DecryptionKey: tm.Session.DecryptionKey,
 				SessionID:     tm.Session.SessionID,
 				CSRFToken:     tm.Session.CSRFToken,
 				Entries:       tm.Session.Entries,
@@ -213,8 +228,9 @@ func (p *GCSPersistence) Save(ctx context.Context, s *OAuth2Server) error {
 		}
 	}
 
+	clientSnapshots := make(map[string]persistedClient, len(s.clients))
 	for key, rc := range s.clients {
-		state.Clients[key] = persistedClient{
+		clientSnapshots[key] = persistedClient{
 			ClientID:     rc.ClientID,
 			ClientSecret: rc.ClientSecret,
 			RedirectURIs: rc.RedirectURIs,
@@ -222,28 +238,73 @@ func (p *GCSPersistence) Save(ctx context.Context, s *OAuth2Server) error {
 	}
 	s.mu.RUnlock()
 
-	data, err := json.Marshal(state)
-	if err != nil {
-		return fmt.Errorf("marshaling state: %w", err)
+	// Write tokens (encrypt keys outside the lock)
+	currentTokenIDs := make(map[string]bool, len(tokenSnapshots))
+	for key, pt := range tokenSnapshots {
+		currentTokenIDs[key] = true
+		encryptedKey, err := p.encryptKey(ctx, pt.Session.DecryptionKey)
+		if err != nil {
+			return fmt.Errorf("encrypting key for token %s: %w", key, err)
+		}
+		pt.Session.DecryptionKey = encryptedKey
+		if _, err := p.client.Collection(tokensCollection).Doc(key).Set(ctx, pt); err != nil {
+			return fmt.Errorf("writing token %s to Firestore: %w", key, err)
+		}
 	}
 
-	obj := p.client.Bucket(p.bucket).Object(stateObjectName)
-	writer := obj.NewWriter(ctx)
-	writer.ContentType = "application/json"
-	if _, err := writer.Write(data); err != nil {
-		_ = writer.Close()
-		return fmt.Errorf("writing state to GCS: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("closing GCS writer: %w", err)
+	// Write clients
+	currentClientIDs := make(map[string]bool, len(clientSnapshots))
+	for key, pc := range clientSnapshots {
+		currentClientIDs[key] = true
+		if _, err := p.client.Collection(clientsCollection).Doc(key).Set(ctx, pc); err != nil {
+			return fmt.Errorf("writing client %s to Firestore: %w", key, err)
+		}
 	}
 
-	slog.Info("persisted state to GCS", "tokens", len(state.Tokens), "clients", len(state.Clients))
+	// Delete stale token docs
+	tokenIter := p.client.Collection(tokensCollection).Documents(ctx)
+	defer tokenIter.Stop()
+	for {
+		doc, err := tokenIter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			slog.Warn("error listing token docs for cleanup", "error", err)
+			break
+		}
+		if !currentTokenIDs[doc.Ref.ID] {
+			if _, err := doc.Ref.Delete(ctx); err != nil {
+				slog.Warn("failed to delete stale token doc", "id", doc.Ref.ID, "error", err)
+			}
+		}
+	}
+
+	// Delete stale client docs
+	clientIter := p.client.Collection(clientsCollection).Documents(ctx)
+	defer clientIter.Stop()
+	for {
+		doc, err := clientIter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			slog.Warn("error listing client docs for cleanup", "error", err)
+			break
+		}
+		if !currentClientIDs[doc.Ref.ID] {
+			if _, err := doc.Ref.Delete(ctx); err != nil {
+				slog.Warn("failed to delete stale client doc", "id", doc.Ref.ID, "error", err)
+			}
+		}
+	}
+
+	slog.Info("persisted state to Firestore", "tokens", len(tokenSnapshots), "clients", len(clientSnapshots))
 	return nil
 }
 
 // RequestSave signals that state should be saved. It debounces rapid saves.
-func (p *GCSPersistence) RequestSave() {
+func (p *FirestorePersistence) RequestSave() {
 	select {
 	case p.saveCh <- struct{}{}:
 	default:
@@ -252,7 +313,7 @@ func (p *GCSPersistence) RequestSave() {
 }
 
 // RunSaveLoop runs a background loop that saves state when requested.
-func (p *GCSPersistence) RunSaveLoop(ctx context.Context, s *OAuth2Server) {
+func (p *FirestorePersistence) RunSaveLoop(ctx context.Context, s *OAuth2Server) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -273,8 +334,8 @@ func (p *GCSPersistence) RunSaveLoop(ctx context.Context, s *OAuth2Server) {
 	}
 }
 
-// Close releases the GCS and KMS client resources.
-func (p *GCSPersistence) Close() error {
+// Close releases the Firestore and KMS client resources.
+func (p *FirestorePersistence) Close() error {
 	if p.kmsClient != nil {
 		_ = p.kmsClient.Close()
 	}

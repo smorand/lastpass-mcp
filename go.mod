@@ -3,6 +3,7 @@ module lastpass-mcp
 go 1.26.1
 
 require (
+	cloud.google.com/go/firestore v1.21.0
 	cloud.google.com/go/kms v1.26.0
 	cloud.google.com/go/storage v1.60.0
 	github.com/modelcontextprotocol/go-sdk v1.4.0
@@ -12,6 +13,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.42.0
 	go.opentelemetry.io/otel/trace v1.42.0
 	golang.org/x/crypto v0.48.0
+	google.golang.org/api v0.265.0
 )
 
 require (
@@ -58,7 +60,6 @@ require (
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	google.golang.org/api v0.265.0 // indirect
 	google.golang.org/genproto v0.0.0-20260128011058-8636f8732409 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260203192932-546029d2fa20 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260203192932-546029d2fa20 // indirect

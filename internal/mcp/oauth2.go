@@ -236,16 +236,16 @@ type OAuth2Server struct {
 	mu      sync.RWMutex
 
 	// Persistence
-	persistence *GCSPersistence
+	persistence Persistence
 }
 
 // OAuth2ServerConfig holds configuration for the OAuth2 server.
 type OAuth2ServerConfig struct {
-	BaseURL        string
-	SecretProject  string
-	SecretName     string
-	CredentialFile string
-	StateBucket    string
+	BaseURL           string
+	SecretProject     string
+	SecretName        string
+	CredentialFile    string
+	FirestoreDatabase string
 }
 
 // NewOAuth2Server creates a new OAuth2 authorization server.
@@ -289,8 +289,8 @@ func (s *OAuth2Server) cleanupExpired() {
 	}
 }
 
-// SetPersistence sets the GCS persistence handler and starts the save loop.
-func (s *OAuth2Server) SetPersistence(p *GCSPersistence) {
+// SetPersistence sets the persistence handler and starts the save loop.
+func (s *OAuth2Server) SetPersistence(p Persistence) {
 	s.persistence = p
 }
 
