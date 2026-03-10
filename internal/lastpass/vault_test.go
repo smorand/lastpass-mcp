@@ -1,8 +1,6 @@
 package lastpass
 
 import (
-	"crypto/aes"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"testing"
@@ -13,6 +11,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // makeChunk builds a single TLV chunk: 4-byte tag + 4-byte big-endian size + data.
+// This is the top-level blob format.
 func makeChunk(tag string, data []byte) []byte {
 	buf := make([]byte, 8+len(data))
 	copy(buf[0:4], tag)
@@ -21,18 +20,27 @@ func makeChunk(tag string, data []byte) []byte {
 	return buf
 }
 
-// makeField builds a sub-item field inside an ACCT chunk (same TLV format).
-// The tag value is irrelevant to parsing; only positional index matters.
+// makeField builds a sub-item field inside an ACCT chunk.
+// Sub-items use size-only format: 4-byte big-endian size + data (no tag).
 func makeField(value []byte) []byte {
-	return makeChunk("fld\x00", value)
+	buf := make([]byte, 4+len(value))
+	binary.BigEndian.PutUint32(buf[0:4], uint32(len(value)))
+	copy(buf[4:], value)
+	return buf
 }
 
 // buildMinimalACCT constructs an ACCT chunk payload with the given fields
 // placed at their correct positional indices. Missing indices get empty fields.
+// Field indices match lastpass-cli blob.c:
+//
+//	0: ID (plain), 1: Name (crypt), 2: Group (crypt), 3: URL (hex),
+//	4: Notes (crypt), 7: Username (crypt), 8: Password (crypt),
+//	12: LastTouch (plain), 29: NoteType (plain), 31: LastModifiedGMT (plain)
 func buildMinimalACCT(t *testing.T, key []byte, id, name, group, url, notes, username, password, noteType string) []byte {
 	t.Helper()
 
-	encryptOrEmpty := func(s string) []byte {
+	// encryptRaw returns raw binary CBC format: ! + IV(16) + ciphertext
+	encryptRaw := func(s string) []byte {
 		if s == "" {
 			return []byte{}
 		}
@@ -40,28 +48,30 @@ func buildMinimalACCT(t *testing.T, key []byte, id, name, group, url, notes, use
 		if err != nil {
 			t.Fatalf("encrypt: %v", err)
 		}
-		iv := ct[:aes.BlockSize]
-		ciphertext := ct[aes.BlockSize:]
-		field := "!" + base64.StdEncoding.EncodeToString(iv) + "|" + base64.StdEncoding.EncodeToString(ciphertext)
-		return []byte(field)
+		// ct is IV(16) + ciphertext from EncryptAES256CBC
+		// Raw vault format: ! + IV(16) + ciphertext (no separator, no base64)
+		raw := make([]byte, 1+len(ct))
+		raw[0] = '!'
+		copy(raw[1:], ct)
+		return raw
 	}
 
-	// We need at least 41 fields (indices 0..40) to cover all parsed positions.
-	fields := make([][]byte, 41)
+	// We need at least 32 fields (indices 0..31) to cover all parsed positions.
+	fields := make([][]byte, 32)
 	for i := range fields {
 		fields[i] = []byte{}
 	}
 
 	fields[0] = []byte(id)
-	fields[1] = encryptOrEmpty(name)
-	fields[2] = encryptOrEmpty(group)
+	fields[1] = encryptRaw(name)
+	fields[2] = encryptRaw(group)
 	fields[3] = []byte(hex.EncodeToString([]byte(url)))
-	fields[4] = encryptOrEmpty(notes)
-	fields[9] = encryptOrEmpty(username)
-	fields[10] = encryptOrEmpty(password)
-	fields[24] = []byte(noteType)
-	fields[33] = []byte("1700000000")
-	fields[40] = []byte("1700000001")
+	fields[4] = encryptRaw(notes)
+	fields[7] = encryptRaw(username)
+	fields[8] = encryptRaw(password)
+	fields[12] = []byte("1700000001") // LastTouch
+	fields[29] = []byte(noteType)
+	fields[31] = []byte("1700000000") // LastModifiedGMT
 
 	var acctData []byte
 	for _, f := range fields {
@@ -173,7 +183,11 @@ func TestParseVaultBlob_MultipleChunks(t *testing.T) {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
 	assertField(t, "entries[0].ID", entries[0].ID, "1")
+	assertField(t, "entries[0].Name", entries[0].Name, "Entry One")
+	assertField(t, "entries[0].Username", entries[0].Username, "u1")
 	assertField(t, "entries[1].ID", entries[1].ID, "2")
+	assertField(t, "entries[1].Name", entries[1].Name, "Entry Two")
+	assertField(t, "entries[1].Username", entries[1].Username, "u2")
 }
 
 func TestParseVaultBlob_Empty(t *testing.T) {
@@ -260,8 +274,7 @@ func TestEntryTypeDetection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// parsePaymentCardNotes (vault.go, unexported but tested indirectly above;
-// this adds focused table-driven coverage)
+// parsePaymentCardNotes
 // ---------------------------------------------------------------------------
 
 func TestParsePaymentCardFields(t *testing.T) {

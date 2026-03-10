@@ -125,6 +125,11 @@ resource "google_cloud_run_v2_service" "mcp" {
         name  = "PROJECT_ID"
         value = local.project_id
       }
+
+      env {
+        name  = "STATE_BUCKET"
+        value = google_storage_bucket.state.name
+      }
     }
   }
 
@@ -172,6 +177,24 @@ resource "google_dns_record_set" "mcp" {
 }
 
 # ============================================
+# STATE BUCKET (session persistence)
+# ============================================
+
+resource "google_storage_bucket" "state" {
+  name     = "${local.prefix}-state-${local.env}"
+  location = upper(local.cloud_run_region)
+  project  = local.project_id
+
+  uniform_bucket_level_access = true
+  force_destroy               = true
+
+  labels = {
+    environment = local.env
+    managed_by  = "terraform"
+  }
+}
+
+# ============================================
 # SERVICE ACCOUNT PERMISSIONS
 # ============================================
 
@@ -179,6 +202,12 @@ resource "google_project_iam_member" "mcp_secretmanager" {
   project = local.project_id
   role    = "roles/secretmanager.secretAccessor"
   member  = "serviceAccount:${local.mcp_service_account}"
+}
+
+resource "google_storage_bucket_iam_member" "mcp_state" {
+  bucket = google_storage_bucket.state.name
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:${local.mcp_service_account}"
 }
 
 # ============================================

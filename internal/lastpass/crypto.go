@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -93,10 +94,10 @@ func EncryptAES256CBC(data, key []byte) ([]byte, error) {
 	return result, nil
 }
 
-// DecryptField decrypts a single vault field. It handles both CBC and ECB
-// encrypted fields. CBC fields are base64-encoded and start with "!" followed
-// by a 16-byte IV prefix. ECB fields are plain base64 without the "!" prefix.
-// Empty fields are returned as empty strings.
+// DecryptField decrypts a single vault field from base64-encoded format.
+// CBC fields start with "!" followed by base64(IV) + "|" + base64(ciphertext).
+// ECB fields are plain base64 without the "!" prefix.
+// This format is used by API responses (e.g., show_website.php).
 func DecryptField(field string, key []byte) (string, error) {
 	if field == "" {
 		return "", nil
@@ -155,6 +156,57 @@ func DecryptField(field string, key []byte) (string, error) {
 	}
 
 	return string(plaintext), nil
+}
+
+// DecryptFieldRaw decrypts a vault field that may be in raw binary or base64 format.
+// It tries formats in the same order as lastpass-cli's cipher_aes_decrypt:
+//  1. Raw CBC: "!" (1 byte) + raw IV (16 bytes) + raw ciphertext (len >= 33, len%16 == 1)
+//  2. Raw ECB: raw ciphertext (len%16 == 0)
+//  3. Base64 fallback: delegates to DecryptField for base64-encoded fields
+func DecryptFieldRaw(data []byte, key []byte) (string, error) {
+	if len(data) == 0 {
+		return "", nil
+	}
+
+	// Try raw CBC: ! + IV(16) + ciphertext, total len >= 33 and len%16 == 1
+	if len(data) >= 33 && len(data)%aes.BlockSize == 1 && data[0] == '!' {
+		iv := data[1:17]
+		ciphertext := data[17:]
+
+		plaintext, err := DecryptAES256CBC(ciphertext, key, iv)
+		if err != nil {
+			return "", fmt.Errorf("decrypting raw CBC field: %w", err)
+		}
+
+		return string(plaintext), nil
+	}
+
+	// Try raw ECB: raw ciphertext where len%16 == 0
+	if len(data)%aes.BlockSize == 0 {
+		plaintext, err := decryptAES256ECB(data, key)
+		if err != nil {
+			return "", fmt.Errorf("decrypting raw ECB field: %w", err)
+		}
+
+		return string(plaintext), nil
+	}
+
+	// Fallback: try base64-encoded format (! + base64(IV) + | + base64(ct))
+	return DecryptField(string(data), key)
+}
+
+// sanitizeDecrypted removes non-printable control characters from decrypted
+// text, except for common whitespace (newline, carriage return, tab).
+// Some vault fields have stray padding bytes after decryption.
+func sanitizeDecrypted(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r == '\n' || r == '\r' || r == '\t' || r >= 32 {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // decryptAES256ECB decrypts data using AES-256-ECB and removes PKCS7 padding.

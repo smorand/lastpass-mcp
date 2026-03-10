@@ -160,6 +160,9 @@ type OAuth2Server struct {
 	codes   map[string]*AuthCode
 	tokens  map[string]*TokenMapping
 	mu      sync.RWMutex
+
+	// Persistence
+	persistence *GCSPersistence
 }
 
 // OAuth2ServerConfig holds configuration for the OAuth2 server.
@@ -168,6 +171,7 @@ type OAuth2ServerConfig struct {
 	SecretProject  string
 	SecretName     string
 	CredentialFile string
+	StateBucket    string
 }
 
 // NewOAuth2Server creates a new OAuth2 authorization server.
@@ -208,6 +212,18 @@ func (s *OAuth2Server) cleanupExpired() {
 			}
 		}
 		s.mu.Unlock()
+	}
+}
+
+// SetPersistence sets the GCS persistence handler and starts the save loop.
+func (s *OAuth2Server) SetPersistence(p *GCSPersistence) {
+	s.persistence = p
+}
+
+// requestSave signals the persistence layer to save state.
+func (s *OAuth2Server) requestSave() {
+	if s.persistence != nil {
+		s.persistence.RequestSave()
 	}
 }
 
@@ -296,6 +312,7 @@ func (s *OAuth2Server) HandleClientRegistration(w http.ResponseWriter, r *http.R
 	s.mu.Lock()
 	s.clients[clientID] = client
 	s.mu.Unlock()
+	s.requestSave()
 
 	slog.Info("registered new OAuth client", "client_id", clientID, "client_name", req.ClientName)
 
@@ -595,6 +612,7 @@ func (s *OAuth2Server) handleAuthorizationCodeGrant(w http.ResponseWriter, clien
 	// Also store refresh token pointing to the same mapping
 	s.tokens[refreshToken] = tokenMapping
 	s.mu.Unlock()
+	s.requestSave()
 
 	resp := TokenResponse{
 		AccessToken:  bearerToken,
@@ -645,6 +663,7 @@ func (s *OAuth2Server) handleRefreshTokenGrant(w http.ResponseWriter, clientID, 
 	s.tokens[newBearerToken] = newMapping
 	s.tokens[newRefreshToken] = newMapping
 	s.mu.Unlock()
+	s.requestSave()
 
 	resp := TokenResponse{
 		AccessToken:  newBearerToken,

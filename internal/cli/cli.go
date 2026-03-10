@@ -135,6 +135,9 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		baseURL = fmt.Sprintf("http://%s:%d", host, port)
 	}
 
+	// Get state bucket from env
+	stateBucket := os.Getenv("STATE_BUCKET")
+
 	// Create MCP server configuration
 	cfg := &mcpserver.Config{
 		Host:           host,
@@ -144,6 +147,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		SecretProject:  secretProject,
 		CredentialFile: mcpCredentialFile,
 		Environment:    environment,
+		StateBucket:    stateBucket,
 	}
 
 	server := mcpserver.NewServer(cfg)

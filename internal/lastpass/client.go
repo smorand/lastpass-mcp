@@ -2,6 +2,7 @@ package lastpass
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
@@ -23,6 +24,7 @@ const (
 // vault operations, and entry management.
 type Client struct {
 	httpClient *http.Client
+	trustedID  string
 }
 
 // Session holds the authenticated session state. The DecryptionKey field
@@ -49,17 +51,34 @@ type loginOK struct {
 }
 
 type loginError struct {
-	Message string `xml:"message,attr"`
-	Cause   string `xml:"cause,attr"`
+	Message        string `xml:"message,attr"`
+	Cause          string `xml:"cause,attr"`
+	RetryID        string `xml:"retryid,attr"`
+	OutOfBandType  string `xml:"outofbandtype,attr"`
+	OutOfBandName  string `xml:"outofbandname,attr"`
 }
 
 // NewClient creates a new LastPass API client with a default HTTP client.
+// It generates a persistent trusted device ID to avoid repeated email verifications.
 func NewClient() *Client {
 	return &Client{
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		trustedID: generateTrustedID(),
 	}
+}
+
+// generateTrustedID creates a random 32-character device identifier.
+func generateTrustedID() string {
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+	b := make([]byte, 32)
+	for i := range b {
+		buf := make([]byte, 1)
+		_, _ = rand.Read(buf)
+		b[i] = chars[int(buf[0])%len(chars)]
+	}
+	return string(b)
 }
 
 // Login authenticates with LastPass and downloads/decrypts the vault.
@@ -177,6 +196,7 @@ func (c *Client) getIterations(ctx context.Context, email string) (int, error) {
 		if err != nil {
 			return fmt.Errorf("creating iterations request: %w", err)
 		}
+		req.Header.Set("User-Agent", "LastPass-CLI/1.0")
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -188,6 +208,8 @@ func (c *Client) getIterations(ctx context.Context, email string) (int, error) {
 		if err != nil {
 			return fmt.Errorf("reading iterations response: %w", err)
 		}
+
+		slog.Info("iterations response", "status", resp.StatusCode, "body", string(body))
 
 		iterations, err = strconv.Atoi(strings.TrimSpace(string(body)))
 		if err != nil {
@@ -207,12 +229,17 @@ func (c *Client) getIterations(ctx context.Context, email string) (int, error) {
 func (c *Client) authenticate(ctx context.Context, email, loginHash string, iterations int) (string, string, error) {
 	form := url.Values{
 		"method":               {"cli"},
-		"xml":                  {"1"},
+		"xml":                  {"2"},
 		"username":             {email},
 		"hash":                 {loginHash},
 		"iterations":           {strconv.Itoa(iterations)},
 		"includeprivatekeyenc": {"1"},
-		"outofbandsupported":   {"0"},
+		"outofbandsupported":   {"1"},
+	}
+
+	// If a trusted ID is provided, include it to skip email verification
+	if c.trustedID != "" {
+		form.Set("uuid", c.trustedID)
 	}
 
 	var sessionID, csrfToken string
@@ -223,8 +250,16 @@ func (c *Client) authenticate(ctx context.Context, email, loginHash string, iter
 			return fmt.Errorf("creating login request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("User-Agent", "LastPass-CLI/1.0")
 
-		resp, err := c.httpClient.Do(req)
+		// Use a client that does not follow redirects so we see the raw response.
+		noRedirectClient := &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+		resp, err := noRedirectClient.Do(req)
 		if err != nil {
 			return fmt.Errorf("sending login request: %w", err)
 		}
@@ -235,13 +270,51 @@ func (c *Client) authenticate(ctx context.Context, email, loginHash string, iter
 			return fmt.Errorf("reading login response: %w", err)
 		}
 
+		slog.Info("login response received", "status", resp.StatusCode, "body_len", len(body), "content_type", resp.Header.Get("Content-Type"))
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			slog.Error("LastPass rate limit hit", "status", resp.StatusCode)
+			return &permanentError{fmt.Errorf("rate limited by LastPass (HTTP 429), please wait a few minutes and try again")}
+		}
+
+		if resp.StatusCode >= 300 {
+			location := resp.Header.Get("Location")
+			slog.Error("login HTTP error", "status", resp.StatusCode, "body", string(body), "location", location)
+			return fmt.Errorf("login returned HTTP %d (location=%s): %s", resp.StatusCode, location, string(body))
+		}
+
+		if len(body) == 0 {
+			return fmt.Errorf("login returned empty response body")
+		}
+
 		var loginResp loginResponse
 		if err := xml.Unmarshal(body, &loginResp); err != nil {
+			slog.Error("failed to parse login XML", "body", string(body), "error", err)
 			return fmt.Errorf("parsing login response XML: %w", err)
 		}
 
 		if loginResp.Error.Cause != "" || loginResp.Error.Message != "" {
-			return fmt.Errorf("login error: %s (cause: %s)", loginResp.Error.Message, loginResp.Error.Cause)
+			slog.Error("LastPass API error", "message", loginResp.Error.Message, "cause", loginResp.Error.Cause, "retryid", loginResp.Error.RetryID, "oob_type", loginResp.Error.OutOfBandType, "raw_xml", string(body))
+
+			// Handle out-of-band verification (email/push approval)
+			if loginResp.Error.RetryID != "" {
+				slog.Info("out-of-band verification required, polling for approval", "oob_type", loginResp.Error.OutOfBandType)
+				sid, token, oobErr := c.pollOOBApproval(ctx, email, loginHash, iterations, loginResp.Error.RetryID)
+				if oobErr != nil {
+					return &permanentError{fmt.Errorf("OOB verification failed: %w", oobErr)}
+				}
+				sessionID = sid
+				csrfToken = token
+				return nil
+			}
+
+			// unifiedloginresult without retryid: LastPass unified login not supported via CLI API
+			if loginResp.Error.Cause == "unifiedloginresult" {
+				return &permanentError{fmt.Errorf("login error: %s (cause: %s)", loginResp.Error.Message, loginResp.Error.Cause)}
+			}
+
+			// Other errors are permanent and should not be retried
+			return &permanentError{fmt.Errorf("login error: %s (cause: %s)", loginResp.Error.Message, loginResp.Error.Cause)}
 		}
 
 		if loginResp.OK.SessionID == "" {
@@ -258,6 +331,88 @@ func (c *Client) authenticate(ctx context.Context, email, loginHash string, iter
 	}
 
 	return sessionID, csrfToken, nil
+}
+
+// pollOOBApproval polls login.php with outofbandrequest/outofbandretry params,
+// waiting for the user to approve the out-of-band verification.
+// This follows the same approach as the official lastpass-cli.
+// It polls every 3 seconds for up to 2 minutes.
+func (c *Client) pollOOBApproval(ctx context.Context, email, loginHash string, iterations int, retryID string) (string, string, error) {
+	pollInterval := 3 * time.Second
+	timeout := 2 * time.Minute
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return "", "", ctx.Err()
+		case <-time.After(pollInterval):
+		}
+
+		form := url.Values{
+			"method":               {"cli"},
+			"xml":                  {"2"},
+			"username":             {email},
+			"hash":                 {loginHash},
+			"iterations":           {strconv.Itoa(iterations)},
+			"includeprivatekeyenc": {"1"},
+			"outofbandsupported":   {"1"},
+			"outofbandrequest":     {"1"},
+			"outofbandretry":       {"1"},
+			"outofbandretryid":     {retryID},
+		}
+		if c.trustedID != "" {
+			form.Set("uuid", c.trustedID)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/login.php", strings.NewReader(form.Encode()))
+		if err != nil {
+			return "", "", fmt.Errorf("creating OOB retry request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("User-Agent", "LastPass-CLI/1.0")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			slog.Warn("OOB retry request failed, retrying", "error", err)
+			continue
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			slog.Warn("reading OOB retry response failed, retrying", "error", err)
+			continue
+		}
+
+		slog.Info("OOB retry response", "status", resp.StatusCode, "body_len", len(body))
+
+		var loginResp loginResponse
+		if err := xml.Unmarshal(body, &loginResp); err != nil {
+			slog.Warn("parsing OOB retry XML failed, retrying", "error", err)
+			continue
+		}
+
+		// Check if user approved
+		if loginResp.OK.SessionID != "" {
+			slog.Info("OOB verification approved")
+			return loginResp.OK.SessionID, loginResp.OK.Token, nil
+		}
+
+		// Still waiting for approval
+		if loginResp.Error.Cause == "outofbandrequired" {
+			retryID = loginResp.Error.RetryID
+			slog.Debug("still waiting for OOB approval", "retryid", retryID)
+			continue
+		}
+
+		// User rejected or some other error
+		if loginResp.Error.Message != "" {
+			return "", "", fmt.Errorf("OOB verification: %s (cause: %s)", loginResp.Error.Message, loginResp.Error.Cause)
+		}
+	}
+
+	return "", "", fmt.Errorf("OOB verification timed out after %v", timeout)
 }
 
 // downloadAndParseVault downloads the vault blob and decrypts all entries.

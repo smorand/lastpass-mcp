@@ -60,6 +60,7 @@ type Config struct {
 	SecretProject  string
 	CredentialFile string
 	Environment    string
+	StateBucket    string
 }
 
 // Server wraps the MCP server and HTTP server.
@@ -354,6 +355,11 @@ func (s *Server) handleSearch(ctx context.Context, req *mcp.CallToolRequest, inp
 		return nil, SearchOutput{}, fmt.Errorf("pattern is required")
 	}
 
+	// Reject overly broad patterns that would match everything
+	if input.Pattern == ".*" || input.Pattern == ".+" || input.Pattern == "." || input.Pattern == "*" {
+		return nil, SearchOutput{}, fmt.Errorf("search pattern is too broad; please provide a more specific term")
+	}
+
 	session, ok := GetSession(ctx)
 	if !ok || session == nil {
 		return nil, SearchOutput{}, fmt.Errorf("no active LastPass session")
@@ -362,6 +368,15 @@ func (s *Server) handleSearch(ctx context.Context, req *mcp.CallToolRequest, inp
 	re, err := regexp.Compile("(?i)" + input.Pattern)
 	if err != nil {
 		return nil, SearchOutput{}, fmt.Errorf("invalid regular expression: %v", err)
+	}
+
+	slog.Info("search request", "pattern", input.Pattern, "type_filter", input.Type, "total_entries", len(session.Entries))
+
+	// Log a sample of entries to debug field parsing
+	for i, entry := range session.Entries {
+		if i < 3 {
+			slog.Info("vault entry sample", "index", i, "id", entry.ID, "name", entry.Name, "url", entry.URL, "username", entry.Username)
+		}
 	}
 
 	results := []SearchResultItem{}
@@ -618,6 +633,39 @@ func buildPaymentCardNotes(input CreateInput) string {
 	return strings.Join(lines, "\n")
 }
 
+// handleRefresh re-downloads and re-decrypts the vault for the authenticated session.
+// POST /refresh (requires Bearer token)
+func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	// Extract Bearer token
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		http.Error(w, "Bearer token required", http.StatusUnauthorized)
+		return
+	}
+	token := strings.TrimPrefix(auth, "Bearer ")
+
+	session, err := s.oauth2Server.ValidateAccessToken(token)
+	if err != nil {
+		http.Error(w, "Invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	// Re-download and parse vault
+	lpClient := lastpass.NewClient()
+	if err := lpClient.RefreshVault(r.Context(), session); err != nil {
+		slog.Error("vault refresh failed", "error", err)
+		http.Error(w, fmt.Sprintf("Refresh failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Persist updated session
+	s.oauth2Server.requestSave()
+
+	slog.Info("vault refreshed via /refresh endpoint", "entry_count", len(session.Entries))
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprintf(w, `{"success":true,"entry_count":%d}`, len(session.Entries))
+}
+
 // Run starts the HTTP server and blocks until shutdown.
 func (s *Server) Run(ctx context.Context) error {
 	// Create the MCP server
@@ -645,7 +693,23 @@ func (s *Server) Run(ctx context.Context) error {
 		SecretProject:  s.config.SecretProject,
 		SecretName:     s.config.SecretName,
 		CredentialFile: s.config.CredentialFile,
+		StateBucket:    s.config.StateBucket,
 	})
+
+	// Initialize GCS persistence if bucket is configured
+	if s.config.StateBucket != "" {
+		persistence, err := NewGCSPersistence(ctx, s.config.StateBucket)
+		if err != nil {
+			slog.Error("failed to create GCS persistence, sessions will not survive restarts", "error", err)
+		} else {
+			s.oauth2Server.SetPersistence(persistence)
+			if err := persistence.Load(ctx, s.oauth2Server); err != nil {
+				slog.Error("failed to load persisted state", "error", err)
+			}
+			go persistence.RunSaveLoop(ctx, s.oauth2Server)
+			defer func() { _ = persistence.Close() }()
+		}
+	}
 
 	// Register OAuth2 routes (not protected by auth)
 	s.oauth2Server.SetupRoutes(mux)
@@ -662,6 +726,9 @@ func (s *Server) Run(ctx context.Context) error {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})
+
+	// Refresh endpoint: re-downloads vault for the session behind the Bearer token
+	mux.HandleFunc("/api/refresh", s.handleRefresh)
 
 	// Wrap MCP handler with authentication middleware
 	authedMCPHandler := s.authMiddleware(mcpHandler)
