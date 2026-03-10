@@ -27,6 +27,20 @@ resource "google_storage_bucket" "terraform_state" {
   }
 }
 
+# Grant access to project owner
+resource "google_storage_bucket_iam_member" "owner_access" {
+  bucket = google_storage_bucket.terraform_state.name
+  role   = "roles/storage.admin"
+  member = local.project_owner
+}
+
+# Grant access to devops service account
+resource "google_storage_bucket_iam_member" "devops_access" {
+  bucket = google_storage_bucket.terraform_state.name
+  role   = "roles/storage.admin"
+  member = "serviceAccount:${google_service_account.devops.email}"
+}
+
 # Output state bucket name for backend configuration
 output "state_bucket_name" {
   description = "GCS bucket name for terraform state"

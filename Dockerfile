@@ -1,43 +1,61 @@
-# Multi-stage Dockerfile for lastpass-mcp server
+ARG GO_VERSION=1.26
+ARG GO_BIN
+ARG HAS_INTERNAL=no
+ARG HAS_DATA=no
 
-FROM golang:1.26 AS builder
+# --- Base image with user setup ---
+FROM golang:${GO_VERSION}-alpine AS prebuild
 
-WORKDIR /app
+ENV USER=appuser
+ENV UID=10001
 
-# Copy go mod files first for better layer caching
-COPY go.mod go.sum ./
+RUN apk update && apk add --no-cache git ca-certificates \
+    && adduser \
+    --disabled-password \
+    --gecos "" \
+    --home "/nonexistent" \
+    --shell "/sbin/nologin" \
+    --no-create-home \
+    --uid "${UID}" \
+    "${USER}"
 
-# Download dependencies
+# --- Conditional internal/ directory ---
+FROM prebuild AS build_yes
+ONBUILD COPY internal/ /build/internal
+
+FROM prebuild AS build_no
+ONBUILD RUN mkdir -p /build/internal
+
+# --- Build stage ---
+FROM build_${HAS_INTERNAL} AS build
+ARG GO_BIN
+COPY go.mod go.sum /build/
+COPY cmd/ /build/cmd/
+WORKDIR /build
 RUN go mod download
+RUN go mod verify
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-w -s" -o /go/bin/app ./cmd/${GO_BIN}
 
-# Copy source code
-COPY . .
+# --- Conditional data/ directory ---
+FROM build AS data_yes
+ONBUILD COPY data/ /data
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-s -w" \
-    -o /lastpass-mcp \
-    ./cmd/lastpass-mcp
+FROM build AS data_no
+ONBUILD RUN mkdir -p /data
 
-# Final minimal image
-FROM alpine:latest
+FROM data_${HAS_DATA} AS runner
 
-RUN apk --no-cache add ca-certificates tzdata
+# --- Final minimal image ---
+FROM scratch
 
-# Create non-root user
-RUN adduser -D -g '' appuser
+COPY --from=runner /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=runner /etc/passwd /etc/group /etc/
+COPY --from=runner /go/bin/app /go/bin/app
+COPY --from=runner /data /data
 
-WORKDIR /app
-
-COPY --from=builder /lastpass-mcp /app/lastpass-mcp
-
-RUN chown -R appuser:appuser /app
-
-USER appuser
+USER appuser:appuser
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
-
-ENTRYPOINT ["/app/lastpass-mcp", "mcp"]
+ENTRYPOINT ["/go/bin/app"]

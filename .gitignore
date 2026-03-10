@@ -18,12 +18,16 @@ bin/
 # Output of the go coverage tool
 *.out
 
+# Go workspace file
+go.work
+
 # Dependency directories
 vendor/
 
 # IDE
 .idea/
 .vscode/
+.jukit/
 *.swp
 *.swo
 *~

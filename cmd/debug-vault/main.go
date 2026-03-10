@@ -62,11 +62,16 @@ func main() {
 	if err != nil {
 		log.Fatal("read GCS:", err)
 	}
-	data, _ := io.ReadAll(reader)
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		log.Fatal("read state data:", err)
+	}
 	reader.Close()
 
 	var state persistedState
-	json.Unmarshal(data, &state)
+	if err := json.Unmarshal(data, &state); err != nil {
+		log.Fatal("parse state JSON:", err)
+	}
 
 	fmt.Printf("Loaded %d tokens, %d clients\n", len(state.Tokens), len(state.Clients))
 
@@ -86,21 +91,30 @@ func main() {
 
 	// Download vault
 	reqURL := "https://lastpass.com/getaccts.php?mobile=1&b64=1&hash=0.0&hasplugin=3.0.23&requestsrc=cli"
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		log.Fatal("create vault request:", err)
+	}
 	req.AddCookie(&http.Cookie{Name: "PHPSESSID", Value: sessionID})
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Fatal("vault request:", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatal("read vault response:", err)
+	}
 
 	if resp.StatusCode != 200 {
 		fmt.Printf("Error: status %d, body: %s\n", resp.StatusCode, string(body)[:min(200, len(body))])
 		os.Exit(1)
 	}
 
-	blob, _ := base64.StdEncoding.DecodeString(strings.TrimSpace(string(body)))
+	blob, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(body)))
+	if err != nil {
+		log.Fatal("base64 decode vault:", err)
+	}
 	fmt.Printf("Vault blob: %d bytes\n", len(blob))
 
 	// Parse vault
@@ -134,7 +148,10 @@ func main() {
 	state.SavedAt = time.Now()
 
 	// Write back to GCS
-	newData, _ := json.Marshal(state)
+	newData, err := json.Marshal(state)
+	if err != nil {
+		log.Fatal("marshal state:", err)
+	}
 	writer := client.Bucket(bucket).Object("oauth2-state.json").NewWriter(ctx)
 	writer.ContentType = "application/json"
 	if _, err := writer.Write(newData); err != nil {

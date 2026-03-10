@@ -14,10 +14,13 @@ make build                    # Build for current platform
 make build-all                # Build for all platforms (linux, darwin amd64/arm64)
 
 # Test and Quality
-make test                     # Run all tests
-make check                    # Run fmt + vet + lint + test
+make test                     # Run functional tests (or notice if none)
+make test-unit                # Run Go unit tests
+make test-all                 # Run both functional and unit tests
+make check                    # Run fmt + vet + lint + test-all
 make fmt                      # Format code
 make vet                      # Run go vet
+make lint                     # Run golangci-lint
 
 # Run locally
 make run ARGS="mcp"                              # Default (localhost:8080)
@@ -82,3 +85,7 @@ config.yaml                   Shared config for prefix, GCP project, resources, 
 | `.agent_docs/lastpass-protocol.md`      | LastPass API, crypto, vault blob format       |
 | `.agent_docs/mcp-tools.md`             | All 6 MCP tools with schemas and examples     |
 | `.agent_docs/terraform.md`             | Infrastructure, init vs iac, deployment       |
+| `.agent_docs/conventions.md`           | Naming patterns, config hierarchy, rules      |
+| `.agent_docs/gotchas.md`              | Non obvious behaviors, known pitfalls         |
+| `.agent_docs/makefile.md`             | Makefile targets and variables                |
+| `docs/`                                | Full human readable documentation             |

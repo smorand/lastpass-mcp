@@ -4,8 +4,10 @@ locals {
   config      = local.config_file
 
   # Global fields
-  prefix = local.config.prefix
-  env    = local.config.env
+  prefix        = local.config.prefix
+  env           = local.config.env
+  project_owner = local.config.project_owner
+  devops        = local.config.devops
 
   # GCP configuration
   gcp = lookup(local.config, "gcp", {})

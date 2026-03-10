@@ -114,11 +114,11 @@ Each `ACCT` chunk contains sub items using the same tag+size+data format. Fields
 | 2     | Group         | Encrypted (CBC/ECB)   |
 | 3     | URL           | Hex encoded           |
 | 4     | Notes         | Encrypted (CBC/ECB)   |
-| 9     | Username      | Encrypted (CBC/ECB)   |
-| 10    | Password      | Encrypted (CBC/ECB)   |
-| 24    | NoteType      | Plain text            |
-| 33    | LastModified   | Plain text (timestamp)|
-| 40    | LastTouch      | Plain text (timestamp)|
+| 7     | Username      | Encrypted (CBC/ECB)   |
+| 8     | Password      | Encrypted (CBC/ECB)   |
+| 12    | LastTouch      | Plain text (timestamp)|
+| 29    | NoteType      | Plain text            |
+| 31    | LastModified   | Plain text (timestamp)|
 
 ## Entry Types
 
