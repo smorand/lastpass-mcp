@@ -30,6 +30,17 @@ import (
 	"lastpass-mcp/internal/lastpass"
 )
 
+const (
+	// tokenExpirySeconds is the lifetime of an access token (24 hours).
+	tokenExpirySeconds = 86400
+	// tokenSecretLength is the byte length for generated client secrets, bearer tokens, etc.
+	tokenSecretLength = 32
+	// clientIDLength is the byte length for generated client IDs.
+	clientIDLength = 16
+	// authStateExpiryMinutes is the maximum age of an authorization state or code.
+	authStateExpiryMinutes = 10
+)
+
 // allowedRedirectHosts defines the hardcoded allowlist of redirect URI host:port
 // combinations. Hardcoded for security: no config that could be misconfigured.
 var allowedRedirectHosts = []struct {
@@ -265,12 +276,12 @@ func (s *OAuth2Server) cleanupExpired() {
 		s.mu.Lock()
 		now := time.Now()
 		for key, state := range s.states {
-			if now.Sub(state.CreatedAt) > 10*time.Minute {
+			if now.Sub(state.CreatedAt) > authStateExpiryMinutes*time.Minute {
 				delete(s.states, key)
 			}
 		}
 		for key, code := range s.codes {
-			if now.Sub(code.CreatedAt) > 10*time.Minute {
+			if now.Sub(code.CreatedAt) > authStateExpiryMinutes*time.Minute {
 				delete(s.codes, key)
 			}
 		}
@@ -315,7 +326,9 @@ func (s *OAuth2Server) HandleProtectedResourceMetadata(w http.ResponseWriter, r 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(metadata)
+	if err := json.NewEncoder(w).Encode(metadata); err != nil {
+		slog.Error("failed to encode protected resource metadata", "error", err)
+	}
 }
 
 // HandleAuthorizationServerMetadata serves RFC 8414 authorization server metadata.
@@ -339,7 +352,9 @@ func (s *OAuth2Server) HandleAuthorizationServerMetadata(w http.ResponseWriter, 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(metadata)
+	if err := json.NewEncoder(w).Encode(metadata); err != nil {
+		slog.Error("failed to encode authorization server metadata", "error", err)
+	}
 }
 
 // HandleClientRegistration implements RFC 7591 Dynamic Client Registration.
@@ -370,8 +385,8 @@ func (s *OAuth2Server) HandleClientRegistration(w http.ResponseWriter, r *http.R
 	}
 
 	// Generate client credentials
-	clientID := generateSecureToken(16)
-	clientSecret := generateSecureToken(32)
+	clientID := generateSecureToken(clientIDLength)
+	clientSecret := generateSecureToken(tokenSecretLength)
 
 	client := &RegisteredClient{
 		ClientID:     clientID,
@@ -400,7 +415,9 @@ func (s *OAuth2Server) HandleClientRegistration(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("failed to encode client registration response", "error", err)
+	}
 }
 
 // HandleAuthorize handles both GET (show login page) and POST (process login) for authorization.
@@ -474,7 +491,7 @@ func (s *OAuth2Server) handleAuthorizeGet(w http.ResponseWriter, r *http.Request
 	}
 
 	// Generate internal state key and store auth state
-	internalState := generateSecureToken(32)
+	internalState := generateSecureToken(tokenSecretLength)
 	authState := &AuthState{
 		ClientID:      clientID,
 		RedirectURI:   redirectURI,
@@ -552,7 +569,7 @@ func (s *OAuth2Server) handleAuthorizePost(w http.ResponseWriter, r *http.Reques
 	s.mu.Unlock()
 
 	// Generate authorization code
-	code := generateSecureToken(32)
+	code := generateSecureToken(tokenSecretLength)
 	codeEntry := &AuthCode{
 		Code:          code,
 		ClientID:      authState.ClientID,
@@ -669,8 +686,8 @@ func (s *OAuth2Server) handleAuthorizationCodeGrant(w http.ResponseWriter, clien
 	}
 
 	// Generate Bearer token and map it to the LastPass session
-	bearerToken := generateSecureToken(32)
-	refreshToken := generateSecureToken(32)
+	bearerToken := generateSecureToken(tokenSecretLength)
+	refreshToken := generateSecureToken(tokenSecretLength)
 
 	tokenMapping := &TokenMapping{
 		BearerToken: bearerToken,
@@ -689,7 +706,7 @@ func (s *OAuth2Server) handleAuthorizationCodeGrant(w http.ResponseWriter, clien
 	resp := TokenResponse{
 		AccessToken:  bearerToken,
 		TokenType:    "Bearer",
-		ExpiresIn:    86400, // 24 hours
+		ExpiresIn:    tokenExpirySeconds,
 		RefreshToken: refreshToken,
 		Scope:        "vault:read vault:write",
 	}
@@ -697,7 +714,9 @@ func (s *OAuth2Server) handleAuthorizationCodeGrant(w http.ResponseWriter, clien
 	slog.Info("token issued for client", "client_id", codeEntry.ClientID)
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("failed to encode token response", "error", err)
+	}
 }
 
 // handleRefreshTokenGrant handles the refresh_token grant type.
@@ -718,8 +737,8 @@ func (s *OAuth2Server) handleRefreshTokenGrant(w http.ResponseWriter, clientID, 
 	}
 
 	// Generate new Bearer token
-	newBearerToken := generateSecureToken(32)
-	newRefreshToken := generateSecureToken(32)
+	newBearerToken := generateSecureToken(tokenSecretLength)
+	newRefreshToken := generateSecureToken(tokenSecretLength)
 
 	newMapping := &TokenMapping{
 		BearerToken: newBearerToken,
@@ -740,7 +759,7 @@ func (s *OAuth2Server) handleRefreshTokenGrant(w http.ResponseWriter, clientID, 
 	resp := TokenResponse{
 		AccessToken:  newBearerToken,
 		TokenType:    "Bearer",
-		ExpiresIn:    86400,
+		ExpiresIn:    tokenExpirySeconds,
 		RefreshToken: newRefreshToken,
 		Scope:        "vault:read vault:write",
 	}
@@ -748,7 +767,9 @@ func (s *OAuth2Server) handleRefreshTokenGrant(w http.ResponseWriter, clientID, 
 	slog.Info("token refreshed for client", "client_id", tokenMapping.ClientID)
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("failed to encode refresh token response", "error", err)
+	}
 }
 
 // ValidateAccessToken validates a Bearer token and returns the associated LastPass session.
@@ -818,5 +839,7 @@ func writeOAuthError(w http.ResponseWriter, errorCode, description string, statu
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("failed to encode OAuth error response", "error", err)
+	}
 }
