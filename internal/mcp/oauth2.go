@@ -23,11 +23,74 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
 	"lastpass-mcp/internal/lastpass"
 )
+
+// allowedRedirectHosts defines the hardcoded allowlist of redirect URI host:port
+// combinations. Hardcoded for security: no config that could be misconfigured.
+var allowedRedirectHosts = []struct {
+	scheme string
+	host   string // host:port
+}{
+	{"http", "localhost:8000"},
+	{"http", "localhost:3000"},
+	{"http", "127.0.0.1:8000"},
+	{"http", "127.0.0.1:3000"},
+}
+
+// allowedExactRedirectURIs defines exact match redirect URIs for production callbacks.
+var allowedExactRedirectURIs = []string{
+	"https://lastpass.mcp.scm-platform.org/oauth/callback",
+}
+
+// isRedirectURIAllowed checks whether a redirect URI is in the hardcoded allowlist.
+// Localhost URIs on ports 8000 and 3000 are allowed with any path.
+// The production callback URL must match exactly.
+func isRedirectURIAllowed(rawURI string) bool {
+	if rawURI == "" {
+		return false
+	}
+
+	// Check exact matches first (production callbacks)
+	for _, allowed := range allowedExactRedirectURIs {
+		if rawURI == allowed {
+			return true
+		}
+	}
+
+	parsed, err := url.Parse(rawURI)
+	if err != nil {
+		return false
+	}
+
+	// Reject URIs with fragments (OAuth2 spec requirement)
+	if parsed.Fragment != "" {
+		return false
+	}
+
+	// Determine host:port for comparison
+	hostPort := parsed.Host
+	if parsed.Port() == "" {
+		// No explicit port: add default for scheme
+		if parsed.Scheme == "http" {
+			hostPort = parsed.Hostname() + ":80"
+		} else if parsed.Scheme == "https" {
+			hostPort = parsed.Hostname() + ":443"
+		}
+	}
+
+	for _, allowed := range allowedRedirectHosts {
+		if parsed.Scheme == allowed.scheme && hostPort == allowed.host {
+			return true
+		}
+	}
+
+	return false
+}
 
 //go:embed templates/login.html
 var loginTemplatesFS embed.FS
@@ -272,7 +335,7 @@ func (s *OAuth2Server) HandleAuthorizationServerMetadata(w http.ResponseWriter, 
 		ResponseTypesSupported:            []string{"code"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
-		TokenEndpointAuthMethodsSupported: []string{"none", "client_secret_basic", "client_secret_post"},
+		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post"},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -296,6 +359,14 @@ func (s *OAuth2Server) HandleClientRegistration(w http.ResponseWriter, r *http.R
 	if len(req.RedirectURIs) == 0 {
 		writeOAuthError(w, "invalid_request", "redirect_uris is required", http.StatusBadRequest)
 		return
+	}
+
+	// Validate all redirect URIs against the allowlist
+	for _, uri := range req.RedirectURIs {
+		if !isRedirectURIAllowed(uri) {
+			writeOAuthError(w, "invalid_request", fmt.Sprintf("redirect_uri not allowed: %s", uri), http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Generate client credentials
@@ -369,23 +440,17 @@ func (s *OAuth2Server) handleAuthorizeGet(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Auto-register client if not registered
-	s.mu.Lock()
+	// Validate client is registered (no auto-registration)
+	s.mu.RLock()
 	client, exists := s.clients[clientID]
-	if !exists {
-		client = &RegisteredClient{
-			ClientID:     clientID,
-			ClientSecret: "",
-			RedirectURIs: []string{redirectURI},
-			CreatedAt:    time.Now(),
-		}
-		s.clients[clientID] = client
-		slog.Info("auto-registered OAuth client", "client_id", clientID, "redirect_uri", redirectURI)
-	}
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
-	// Validate redirect_uri, add if not present
-	s.mu.Lock()
+	if !exists {
+		writeOAuthError(w, "invalid_client", "Client not registered. Use /oauth/register first.", http.StatusUnauthorized)
+		return
+	}
+
+	// Validate redirect_uri is in client's registered list (no auto-addition)
 	validRedirect := false
 	for _, uri := range client.RedirectURIs {
 		if uri == redirectURI {
@@ -394,10 +459,19 @@ func (s *OAuth2Server) handleAuthorizeGet(w http.ResponseWriter, r *http.Request
 		}
 	}
 	if !validRedirect {
-		client.RedirectURIs = append(client.RedirectURIs, redirectURI)
-		slog.Info("added redirect_uri for client", "client_id", clientID, "redirect_uri", redirectURI)
+		writeOAuthError(w, "invalid_request", "redirect_uri not registered for this client", http.StatusBadRequest)
+		return
 	}
-	s.mu.Unlock()
+
+	// PKCE is mandatory: require code_challenge with S256
+	if codeChallenge == "" {
+		writeOAuthError(w, "invalid_request", "code_challenge is required (PKCE mandatory)", http.StatusBadRequest)
+		return
+	}
+	if codeChallengeMethod != "S256" {
+		writeOAuthError(w, "invalid_request", "code_challenge_method must be S256", http.StatusBadRequest)
+		return
+	}
 
 	// Generate internal state key and store auth state
 	internalState := generateSecureToken(32)
@@ -584,16 +658,14 @@ func (s *OAuth2Server) handleAuthorizationCodeGrant(w http.ResponseWriter, clien
 		return
 	}
 
-	// Validate PKCE if code_challenge was provided during authorization
-	if codeEntry.CodeChallenge != "" {
-		if codeVerifier == "" {
-			writeOAuthError(w, "invalid_request", "code_verifier is required", http.StatusBadRequest)
-			return
-		}
-		if !validatePKCE(codeVerifier, codeEntry.CodeChallenge, codeEntry.CodeMethod) {
-			writeOAuthError(w, "invalid_grant", "Invalid code_verifier", http.StatusBadRequest)
-			return
-		}
+	// Validate PKCE (mandatory)
+	if codeVerifier == "" {
+		writeOAuthError(w, "invalid_request", "code_verifier is required (PKCE mandatory)", http.StatusBadRequest)
+		return
+	}
+	if !validatePKCE(codeVerifier, codeEntry.CodeChallenge, codeEntry.CodeMethod) {
+		writeOAuthError(w, "invalid_grant", "Invalid code_verifier", http.StatusBadRequest)
+		return
 	}
 
 	// Generate Bearer token and map it to the LastPass session
