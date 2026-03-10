@@ -22,6 +22,11 @@ resource "docker_image" "mcp" {
     context    = "${path.root}/.."
     dockerfile = "Dockerfile"
 
+    build_args = {
+      GO_BIN       = "lastpass-mcp"
+      HAS_INTERNAL = "yes"
+    }
+
     label = {
       "org.opencontainers.image.source" = "https://github.com/smorand/lastpass-mcp"
       "org.opencontainers.image.title"  = "lastpass-mcp"
