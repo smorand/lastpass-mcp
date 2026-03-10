@@ -7,6 +7,10 @@ prefix: scmlastpass
 project_name: lastpass-mcp
 env: prd
 description: LastPass MCP Server - Standalone Go MCP server with direct LastPass API integration
+project_owner: "user:seb.morand@gmail.com"
+
+devops:
+  role: "roles/owner"
 
 # ============================================
 # CLOUD PROVIDER CONFIGURATION
@@ -21,6 +25,7 @@ gcp:
   project_id: project-fb127223-bfef-43d1-94e
   location: europe-west1
   services:
+    - storage.googleapis.com
     - run.googleapis.com
     - secretmanager.googleapis.com
     - cloudbuild.googleapis.com
