@@ -61,6 +61,7 @@ type Config struct {
 	CredentialFile string
 	Environment    string
 	StateBucket    string
+	KmsKeyName     string
 }
 
 // Server wraps the MCP server and HTTP server.
@@ -698,7 +699,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Initialize GCS persistence if bucket is configured
 	if s.config.StateBucket != "" {
-		persistence, err := NewGCSPersistence(ctx, s.config.StateBucket)
+		persistence, err := NewGCSPersistence(ctx, s.config.StateBucket, s.config.KmsKeyName)
 		if err != nil {
 			slog.Error("failed to create GCS persistence, sessions will not survive restarts", "error", err)
 		} else {

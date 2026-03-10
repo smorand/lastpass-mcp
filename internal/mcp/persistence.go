@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"time"
 
+	kms "cloud.google.com/go/kms/apiv1"
+	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
 	"cloud.google.com/go/storage"
 	"lastpass-mcp/internal/lastpass"
 )
@@ -52,25 +54,72 @@ type persistedState struct {
 
 // GCSPersistence handles saving and loading OAuth2 state to GCS.
 type GCSPersistence struct {
-	bucket  string
-	client  *storage.Client
-	saveCh  chan struct{}
+	bucket     string
+	client     *storage.Client
+	kmsClient  *kms.KeyManagementClient
+	kmsKeyName string
+	saveCh     chan struct{}
 }
 
 // NewGCSPersistence creates a new GCS persistence handler.
-func NewGCSPersistence(ctx context.Context, bucket string) (*GCSPersistence, error) {
+// If kmsKeyName is provided, DecryptionKey fields will be encrypted/decrypted with Cloud KMS.
+func NewGCSPersistence(ctx context.Context, bucket string, kmsKeyName string) (*GCSPersistence, error) {
 	client, err := storage.NewClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("creating GCS client: %w", err)
 	}
 
 	p := &GCSPersistence{
-		bucket: bucket,
-		client: client,
-		saveCh: make(chan struct{}, 1),
+		bucket:     bucket,
+		client:     client,
+		kmsKeyName: kmsKeyName,
+		saveCh:     make(chan struct{}, 1),
+	}
+
+	if kmsKeyName != "" {
+		kmsClient, err := kms.NewKeyManagementClient(ctx)
+		if err != nil {
+			_ = client.Close()
+			return nil, fmt.Errorf("creating KMS client: %w", err)
+		}
+		p.kmsClient = kmsClient
+		slog.Info("KMS encryption enabled for state persistence", "key", kmsKeyName)
 	}
 
 	return p, nil
+}
+
+// encryptKey encrypts a DecryptionKey with Cloud KMS. Returns plaintext if KMS is not configured.
+func (p *GCSPersistence) encryptKey(ctx context.Context, plaintext []byte) ([]byte, error) {
+	if p.kmsClient == nil || len(plaintext) == 0 {
+		return plaintext, nil
+	}
+	resp, err := p.kmsClient.Encrypt(ctx, &kmspb.EncryptRequest{
+		Name:      p.kmsKeyName,
+		Plaintext: plaintext,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("KMS encrypt: %w", err)
+	}
+	return resp.Ciphertext, nil
+}
+
+// decryptKey decrypts a DecryptionKey with Cloud KMS. Returns ciphertext as is if KMS is not configured.
+// If decryption fails (e.g. data was stored in plaintext before KMS was enabled), the original data
+// is returned as is to support migration from plaintext to encrypted storage.
+func (p *GCSPersistence) decryptKey(ctx context.Context, ciphertext []byte) ([]byte, error) {
+	if p.kmsClient == nil || len(ciphertext) == 0 {
+		return ciphertext, nil
+	}
+	resp, err := p.kmsClient.Decrypt(ctx, &kmspb.DecryptRequest{
+		Name:       p.kmsKeyName,
+		Ciphertext: ciphertext,
+	})
+	if err != nil {
+		slog.Warn("KMS decrypt failed, assuming plaintext (pre-KMS data)", "error", err)
+		return ciphertext, nil
+	}
+	return resp.Plaintext, nil
 }
 
 // Load reads the persisted state from GCS and populates the OAuth2Server maps.
@@ -100,11 +149,15 @@ func (p *GCSPersistence) Load(ctx context.Context, s *OAuth2Server) error {
 	defer s.mu.Unlock()
 
 	for key, pt := range state.Tokens {
+		decryptionKey, err := p.decryptKey(ctx, pt.Session.DecryptionKey)
+		if err != nil {
+			return fmt.Errorf("decrypting key for token %s: %w", key, err)
+		}
 		s.tokens[key] = &TokenMapping{
 			BearerToken: pt.BearerToken,
 			Session: &lastpass.Session{
 				Email:         pt.Session.Email,
-				DecryptionKey: pt.Session.DecryptionKey,
+				DecryptionKey: decryptionKey,
 				SessionID:     pt.Session.SessionID,
 				CSRFToken:     pt.Session.CSRFToken,
 				Entries:       pt.Session.Entries,
@@ -140,11 +193,16 @@ func (p *GCSPersistence) Save(ctx context.Context, s *OAuth2Server) error {
 		if tm.Session == nil {
 			continue
 		}
+		encryptedKey, err := p.encryptKey(ctx, tm.Session.DecryptionKey)
+		if err != nil {
+			s.mu.RUnlock()
+			return fmt.Errorf("encrypting key for token %s: %w", key, err)
+		}
 		state.Tokens[key] = persistedToken{
 			BearerToken: tm.BearerToken,
 			Session: persistedSession{
 				Email:         tm.Session.Email,
-				DecryptionKey: tm.Session.DecryptionKey,
+				DecryptionKey: encryptedKey,
 				SessionID:     tm.Session.SessionID,
 				CSRFToken:     tm.Session.CSRFToken,
 				Entries:       tm.Session.Entries,
@@ -215,7 +273,10 @@ func (p *GCSPersistence) RunSaveLoop(ctx context.Context, s *OAuth2Server) {
 	}
 }
 
-// Close releases the GCS client resources.
+// Close releases the GCS and KMS client resources.
 func (p *GCSPersistence) Close() error {
+	if p.kmsClient != nil {
+		_ = p.kmsClient.Close()
+	}
 	return p.client.Close()
 }

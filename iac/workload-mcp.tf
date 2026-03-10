@@ -23,6 +23,9 @@ locals {
   # Docker image (uses Artifact Registry)
   mcp_image = "${local.cloud_run_region}-docker.pkg.dev/${local.project_id}/${google_artifact_registry_repository.mcp.name}/${local.mcp_name}:latest"
 
+  # KMS key resource name for state encryption
+  kms_key_name = "projects/${local.project_id}/locations/${local.location}/keyRings/${local.prefix}-${local.location_id}-${local.env}/cryptoKeys/state-encryption"
+
   # Resource limits from cloud_run config
   mcp_cpu           = lookup(local.cloud_run_config, "cpu", "1")
   mcp_memory        = lookup(local.cloud_run_config, "memory", "256Mi")
@@ -129,6 +132,11 @@ resource "google_cloud_run_v2_service" "mcp" {
       env {
         name  = "STATE_BUCKET"
         value = google_storage_bucket.state.name
+      }
+
+      env {
+        name  = "KMS_KEY_NAME"
+        value = local.kms_key_name
       }
     }
   }

@@ -138,6 +138,9 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	// Get state bucket from env
 	stateBucket := os.Getenv("STATE_BUCKET")
 
+	// Get KMS key name from env
+	kmsKeyName := os.Getenv("KMS_KEY_NAME")
+
 	// Create MCP server configuration
 	cfg := &mcpserver.Config{
 		Host:           host,
@@ -148,6 +151,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		CredentialFile: mcpCredentialFile,
 		Environment:    environment,
 		StateBucket:    stateBucket,
+		KmsKeyName:     kmsKeyName,
 	}
 
 	server := mcpserver.NewServer(cfg)

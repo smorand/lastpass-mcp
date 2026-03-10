@@ -65,8 +65,11 @@ Configuration is provided via CLI flags or environment variables. Flags take pre
 | `--secret-project`  | `SECRET_PROJECT` |             | GCP project for Secret Manager           |
 | `--credential-file` |                  |             | Local OAuth credential file (fallback)   |
 | `--environment`     | `ENVIRONMENT`    |             | Environment label (dev, stg, prd)        |
+|                     | `KMS_KEY_NAME`   |             | Cloud KMS key for state encryption       |
 
 When `--base-url` is not set, it defaults to `http://<host>:<port>`.
+
+When `KMS_KEY_NAME` is set, the `DecryptionKey` field in persisted GCS state is encrypted with Cloud KMS before saving and decrypted after loading. This protects vault decryption keys at rest: even if the GCS bucket is compromised, the keys cannot be read without KMS access. If `KMS_KEY_NAME` is empty, keys are stored in plaintext (backward compatible).
 
 ## MCP Tool Reference
 
