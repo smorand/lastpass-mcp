@@ -61,7 +61,7 @@ Core of the application. Contains two main files:
   - Authorization Code flow with PKCE (S256)
   - Token refresh
 
-All state (clients, auth states, auth codes, token mappings) is stored in memory with `sync.RWMutex` protection. A background goroutine cleans up expired states and codes every minute.
+All state (clients, auth states, auth codes, token mappings) is stored in memory with `sync.RWMutex` protection. Tokens and clients are persisted to Firestore (per document writes with KMS encryption for DecryptionKey). A background goroutine cleans up expired states and codes every minute.
 
 **templates/login.html**: Embedded HTML login page rendered during the OAuth authorize flow.
 

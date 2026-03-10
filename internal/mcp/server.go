@@ -53,15 +53,15 @@ func getBearerToken(ctx context.Context) (string, bool) {
 
 // Config holds the MCP server configuration.
 type Config struct {
-	Host           string
-	Port           int
-	BaseURL        string
-	SecretName     string
-	SecretProject  string
-	CredentialFile string
-	Environment    string
-	StateBucket    string
-	KmsKeyName     string
+	Host              string
+	Port              int
+	BaseURL           string
+	SecretName        string
+	SecretProject     string
+	CredentialFile    string
+	Environment       string
+	FirestoreDatabase string
+	KmsKeyName        string
 }
 
 // Server wraps the MCP server and HTTP server.
@@ -690,18 +690,19 @@ func (s *Server) Run(ctx context.Context) error {
 
 	// Initialize OAuth2 server
 	s.oauth2Server = NewOAuth2Server(&OAuth2ServerConfig{
-		BaseURL:        s.config.BaseURL,
-		SecretProject:  s.config.SecretProject,
-		SecretName:     s.config.SecretName,
-		CredentialFile: s.config.CredentialFile,
-		StateBucket:    s.config.StateBucket,
+		BaseURL:           s.config.BaseURL,
+		SecretProject:     s.config.SecretProject,
+		SecretName:        s.config.SecretName,
+		CredentialFile:    s.config.CredentialFile,
+		FirestoreDatabase: s.config.FirestoreDatabase,
 	})
 
-	// Initialize GCS persistence if bucket is configured
-	if s.config.StateBucket != "" {
-		persistence, err := NewGCSPersistence(ctx, s.config.StateBucket, s.config.KmsKeyName)
+	// Initialize Firestore persistence if database is configured
+	if s.config.FirestoreDatabase != "" {
+		projectID := s.config.SecretProject
+		persistence, err := NewFirestorePersistence(ctx, projectID, s.config.FirestoreDatabase, s.config.KmsKeyName)
 		if err != nil {
-			slog.Error("failed to create GCS persistence, sessions will not survive restarts", "error", err)
+			slog.Error("failed to create Firestore persistence, sessions will not survive restarts", "error", err)
 		} else {
 			s.oauth2Server.SetPersistence(persistence)
 			if err := persistence.Load(ctx, s.oauth2Server); err != nil {

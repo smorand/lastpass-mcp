@@ -52,7 +52,8 @@ Uses the `kreuzwerker/docker` Terraform provider to:
 
 ### workload-mcp.tf Details
 - **Artifact Registry**: Docker repository for container images
-- **Cloud Run v2 Service**: Runs the MCP server container with environment variables (HOST, SECRET_NAME, BASE_URL, ENVIRONMENT, PROJECT_ID, STATE_BUCKET, KMS_KEY_NAME)
+- **Cloud Run v2 Service**: Runs the MCP server container with environment variables (HOST, SECRET_NAME, BASE_URL, ENVIRONMENT, PROJECT_ID, FIRESTORE_DATABASE, KMS_KEY_NAME)
+- **Firestore Database**: Native mode database for persisting OAuth2 tokens and clients as individual documents
 - **Domain Mapping**: Maps `lastpass.mcp.scm-platform.org` to the Cloud Run service
 - **DNS Record**: CNAME pointing to `ghs.googlehosted.com.` for managed SSL
 - **IAM**: Service account gets Secret Manager accessor role; optional public access via `allUsers` invoker role

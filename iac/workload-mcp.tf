@@ -130,8 +130,8 @@ resource "google_cloud_run_v2_service" "mcp" {
       }
 
       env {
-        name  = "STATE_BUCKET"
-        value = google_storage_bucket.state.name
+        name  = "FIRESTORE_DATABASE"
+        value = google_firestore_database.state.name
       }
 
       env {
@@ -185,21 +185,16 @@ resource "google_dns_record_set" "mcp" {
 }
 
 # ============================================
-# STATE BUCKET (session persistence)
+# FIRESTORE DATABASE (session persistence)
 # ============================================
 
-resource "google_storage_bucket" "state" {
-  name     = "${local.prefix}-state-${local.env}"
-  location = upper(local.cloud_run_region)
-  project  = local.project_id
-
-  uniform_bucket_level_access = true
-  force_destroy               = true
-
-  labels = {
-    environment = local.env
-    managed_by  = "terraform"
-  }
+resource "google_firestore_database" "state" {
+  project                 = local.project_id
+  name                    = "${local.prefix}-state-${local.env}"
+  location_id             = local.cloud_run_region
+  type                    = "FIRESTORE_NATIVE"
+  deletion_policy         = "DELETE"
+  delete_protection_state = "DELETE_PROTECTION_DISABLED"
 }
 
 # ============================================
@@ -212,10 +207,10 @@ resource "google_project_iam_member" "mcp_secretmanager" {
   member  = "serviceAccount:${local.mcp_service_account}"
 }
 
-resource "google_storage_bucket_iam_member" "mcp_state" {
-  bucket = google_storage_bucket.state.name
-  role   = "roles/storage.objectUser"
-  member = "serviceAccount:${local.mcp_service_account}"
+resource "google_project_iam_member" "mcp_firestore" {
+  project = local.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${local.mcp_service_account}"
 }
 
 # ============================================

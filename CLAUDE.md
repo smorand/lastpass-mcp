@@ -75,6 +75,7 @@ config.yaml                   Shared config for prefix, GCP project, resources, 
 | SECRET_NAME    | Secret name for OAuth credentials  |             |
 | ENVIRONMENT    | Environment label (dev, stg, prd)  |             |
 | PROJECT_ID     | GCP project ID (fallback)          |             |
+| FIRESTORE_DATABASE | Firestore database for state persistence |    |
 | KMS_KEY_NAME   | Cloud KMS key for encrypting state |             |
 
 ## Documentation Index

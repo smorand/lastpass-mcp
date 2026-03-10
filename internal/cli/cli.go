@@ -135,23 +135,23 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		baseURL = fmt.Sprintf("http://%s:%d", host, port)
 	}
 
-	// Get state bucket from env
-	stateBucket := os.Getenv("STATE_BUCKET")
+	// Get Firestore database from env
+	firestoreDatabase := os.Getenv("FIRESTORE_DATABASE")
 
 	// Get KMS key name from env
 	kmsKeyName := os.Getenv("KMS_KEY_NAME")
 
 	// Create MCP server configuration
 	cfg := &mcpserver.Config{
-		Host:           host,
-		Port:           port,
-		BaseURL:        baseURL,
-		SecretName:     secretName,
-		SecretProject:  secretProject,
-		CredentialFile: mcpCredentialFile,
-		Environment:    environment,
-		StateBucket:    stateBucket,
-		KmsKeyName:     kmsKeyName,
+		Host:              host,
+		Port:              port,
+		BaseURL:           baseURL,
+		SecretName:        secretName,
+		SecretProject:     secretProject,
+		CredentialFile:    mcpCredentialFile,
+		Environment:       environment,
+		FirestoreDatabase: firestoreDatabase,
+		KmsKeyName:        kmsKeyName,
 	}
 
 	server := mcpserver.NewServer(cfg)
