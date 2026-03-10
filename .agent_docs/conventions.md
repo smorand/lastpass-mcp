@@ -49,6 +49,7 @@ Flags take precedence over environment variables, which take precedence over def
 
 - Never use default GCP service accounts
 - Config shared between Terraform init/ and iac/ via `config.yaml`
-- State bucket and KMS key are created in init/, referenced by name in iac/
+- init/ contains ONLY: state bucket, devops SA, API enablement
+- Workload SAs and KMS resources are in iac/ (direct resource references)
 - Docker builds are managed by Terraform (not manual)
 - All GCS buckets use uniform bucket level access

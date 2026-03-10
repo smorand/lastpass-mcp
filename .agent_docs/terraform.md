@@ -22,12 +22,7 @@ Creates foundational resources that must exist before the main infrastructure:
 | `provider.tf`         | Google provider configuration                  |
 | `state-backend.tf`    | GCS bucket for Terraform state (versioned)     |
 | `services.tf`         | GCP API enablement (Cloud Run, Secret Manager, etc.) |
-| `service-accounts.tf` | Cloud Build and Cloud Run service accounts     |
-| `kms.tf`              | KMS keyring, crypto key, IAM for state encryption |
-
-**Service accounts created:**
-- `<prefix>-cloudbuild-<env>`: Used for building Docker images
-- `<prefix>-cloudrun-<env>`: Used by Cloud Run services, granted Secret Manager access
+| `devops.tf`           | DevOps service account for CI/CD               |
 
 **Outputs used by iac/:**
 - `backend_config`: GCS backend block for iac/provider.tf
@@ -39,10 +34,12 @@ Manages the running application:
 
 | File              | Resources Created                              |
 |-------------------|------------------------------------------------|
-| `local.tf`        | Shared locals from config.yaml                 |
-| `docker.tf`       | Docker image build (local) and push to Artifact Registry |
-| `secrets.tf`      | Secret Manager secret for OAuth credentials    |
-| `workload-mcp.tf` | Artifact Registry repo, Cloud Run service, domain mapping, DNS, IAM |
+| `local.tf`            | Shared locals from config.yaml                 |
+| `service-accounts.tf` | Cloud Build and Cloud Run workload service accounts |
+| `kms.tf`              | KMS keyring, crypto key, IAM for state encryption |
+| `docker.tf`           | Docker image build (local) and push to Artifact Registry |
+| `secrets.tf`          | Secret Manager secret for OAuth credentials    |
+| `workload-mcp.tf`    | Artifact Registry repo, Cloud Run service, domain mapping, DNS, IAM |
 
 ### docker.tf Details
 Uses the `kreuzwerker/docker` Terraform provider to:

@@ -48,8 +48,8 @@ internal/
     templates/                 HTML login page template
   lastpass/                    LastPass API client, crypto, vault parsing
   telemetry/                   OpenTelemetry tracing
-iac/                          Terraform: Cloud Run, Artifact Registry, secrets, DNS
-init/                         Terraform: state backend, service accounts, API enablement
+iac/                          Terraform: Cloud Run, Artifact Registry, secrets, DNS, service accounts, KMS
+init/                         Terraform: state backend, devops SA, API enablement
 specs/                        Design specifications
 config.yaml                   Shared config for prefix, GCP project, resources, parameters
 ```
@@ -62,7 +62,7 @@ config.yaml                   Shared config for prefix, GCP project, resources, 
 - Vault fields are encrypted with AES 256 CBC (or ECB for legacy) and base64 encoded
 - OAuth2 state is stored in memory (maps with mutex protection)
 - Config shared between Terraform init/ and iac/ via `config.yaml`
-- Never use default GCP service accounts; custom ones are created in init/
+- Never use default GCP service accounts; workload SAs are created in iac/, devops SA in init/
 
 ## Environment Variables
 

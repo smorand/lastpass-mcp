@@ -1,7 +1,6 @@
 locals {
   # Load configuration from config.yaml
-  config_file = yamldecode(file("${path.root}/../config.yaml"))
-  config      = local.config_file
+  config = yamldecode(file("${path.root}/../config.yaml"))
 
   # Global fields
   prefix        = local.config.prefix

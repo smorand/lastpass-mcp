@@ -1,4 +1,4 @@
-# Cloud KMS keyring and crypto key for encrypting DecryptionKey in GCS state
+# Cloud KMS keyring and crypto key for encrypting DecryptionKey in state
 #
 # Resources:
 # - KMS keyring (regional)

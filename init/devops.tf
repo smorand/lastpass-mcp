@@ -16,3 +16,8 @@ output "devops_service_account" {
   description = "DevOps service account email"
   value       = google_service_account.devops.email
 }
+
+output "docker_registry_location" {
+  description = "Docker registry location for auth configuration"
+  value       = "${local.location}-docker.pkg.dev"
+}

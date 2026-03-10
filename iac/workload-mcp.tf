@@ -23,9 +23,6 @@ locals {
   # Docker image (uses Artifact Registry)
   mcp_image = "${local.cloud_run_region}-docker.pkg.dev/${local.project_id}/${google_artifact_registry_repository.mcp.name}/${local.mcp_name}:latest"
 
-  # KMS key resource name for state encryption
-  kms_key_name = "projects/${local.project_id}/locations/${local.location}/keyRings/${local.prefix}-${local.location_id}-${local.env}/cryptoKeys/state-encryption"
-
   # Resource limits from cloud_run config
   mcp_cpu           = lookup(local.cloud_run_config, "cpu", "1")
   mcp_memory        = lookup(local.cloud_run_config, "memory", "256Mi")
@@ -35,8 +32,8 @@ locals {
   # Access configuration
   allow_unauthenticated = lookup(local.cloud_run_config, "allow_unauthenticated", true)
 
-  # Service account email from init module (referenced by name)
-  mcp_service_account = "${local.prefix}-cloudrun-${local.env}@${local.project_id}.iam.gserviceaccount.com"
+  # Service account email (direct resource reference from service-accounts.tf)
+  mcp_service_account = google_service_account.cloudrun.email
 
   # OAuth secret name from secrets.tf
   oauth_secret_name = google_secret_manager_secret.oauth_credentials.secret_id
@@ -136,7 +133,7 @@ resource "google_cloud_run_v2_service" "mcp" {
 
       env {
         name  = "KMS_KEY_NAME"
-        value = local.kms_key_name
+        value = google_kms_crypto_key.state_encryption.id
       }
     }
   }
@@ -149,6 +146,7 @@ resource "google_cloud_run_v2_service" "mcp" {
   depends_on = [
     google_artifact_registry_repository.mcp,
     docker_registry_image.mcp,
+    google_service_account.cloudrun,
   ]
 }
 
@@ -230,6 +228,11 @@ resource "google_cloud_run_v2_service_iam_member" "mcp_public" {
 # OUTPUTS
 # ============================================
 
+output "docker_registry_location" {
+  description = "Docker registry location for auth configuration"
+  value       = "${local.cloud_run_region}-docker.pkg.dev"
+}
+
 output "mcp_url" {
   description = "MCP server URL (custom domain)"
   value       = local.base_url
@@ -242,7 +245,7 @@ output "mcp_cloud_run_url" {
 
 output "mcp_service_account" {
   description = "MCP service account email"
-  value       = local.mcp_service_account
+  value       = google_service_account.cloudrun.email
 }
 
 output "artifact_registry_url" {
