@@ -223,10 +223,7 @@ type TokenMapping struct {
 
 // OAuth2Server handles OAuth2 authorization server endpoints.
 type OAuth2Server struct {
-	baseURL        string
-	secretProject  string
-	secretName     string
-	credentialFile string
+	baseURL string
 
 	// In-memory stores
 	clients map[string]*RegisteredClient
@@ -241,24 +238,17 @@ type OAuth2Server struct {
 
 // OAuth2ServerConfig holds configuration for the OAuth2 server.
 type OAuth2ServerConfig struct {
-	BaseURL           string
-	SecretProject     string
-	SecretName        string
-	CredentialFile    string
-	FirestoreDatabase string
+	BaseURL string
 }
 
 // NewOAuth2Server creates a new OAuth2 authorization server.
 func NewOAuth2Server(cfg *OAuth2ServerConfig) *OAuth2Server {
 	s := &OAuth2Server{
-		baseURL:        cfg.BaseURL,
-		secretProject:  cfg.SecretProject,
-		secretName:     cfg.SecretName,
-		credentialFile: cfg.CredentialFile,
-		clients:        make(map[string]*RegisteredClient),
-		states:         make(map[string]*AuthState),
-		codes:          make(map[string]*AuthCode),
-		tokens:         make(map[string]*TokenMapping),
+		baseURL: cfg.BaseURL,
+		clients: make(map[string]*RegisteredClient),
+		states:  make(map[string]*AuthState),
+		codes:   make(map[string]*AuthCode),
+		tokens:  make(map[string]*TokenMapping),
 	}
 
 	// Start background cleanup goroutine

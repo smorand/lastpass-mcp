@@ -1,0 +1,15 @@
+services:
+  lastpass-mcp:
+    build: .
+    container_name: lastpass-mcp
+    restart: unless-stopped
+    expose:
+      - "8080"
+    env_file:
+      - /app/data/lastpass-mcp/.env
+    networks:
+      - proxy-network
+
+networks:
+  proxy-network:
+    external: true

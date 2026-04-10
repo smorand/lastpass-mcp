@@ -14,13 +14,10 @@ import (
 
 // MCP server command flags
 var (
-	mcpPort           int
-	mcpHost           string
-	mcpBaseURL        string
-	mcpSecretName     string
-	mcpSecretProject  string
-	mcpCredentialFile string
-	mcpEnvironment    string
+	mcpPort        int
+	mcpHost        string
+	mcpBaseURL     string
+	mcpEnvironment string
 )
 
 // rootCmd is the root command for the CLI.
@@ -65,29 +62,21 @@ Authentication:
   # Start on custom port
   lastpass-mcp mcp --port 3000
 
-  # Production deployment with Secret Manager
-  lastpass-mcp mcp --secret-project "my-gcp-project" --secret-name "oauth-credentials"
-
   # Start on all interfaces
   lastpass-mcp mcp --host 0.0.0.0 --port 8080`,
 	RunE: runMCP,
 }
 
 func init() {
-	// Setup mcp command flags
 	mcpCmd.Flags().IntVarP(&mcpPort, "port", "p", 8080, "Port to listen on")
 	mcpCmd.Flags().StringVarP(&mcpHost, "host", "H", "localhost", "Host to bind to")
 	mcpCmd.Flags().StringVar(&mcpBaseURL, "base-url", "", "Base URL for OAuth callbacks (e.g., https://lastpass.mcp.scm-platform.org)")
-	mcpCmd.Flags().StringVar(&mcpSecretName, "secret-name", "", "Secret Manager secret name for OAuth credentials")
-	mcpCmd.Flags().StringVar(&mcpSecretProject, "secret-project", "", "GCP project for Secret Manager")
-	mcpCmd.Flags().StringVar(&mcpCredentialFile, "credential-file", "", "Local OAuth credential file path (fallback)")
 	mcpCmd.Flags().StringVar(&mcpEnvironment, "environment", "", "Environment (dev, stg, prd)")
 
 	rootCmd.AddCommand(mcpCmd)
 }
 
 func runMCP(cmd *cobra.Command, args []string) error {
-	// Determine host: use flag value, then HOST env var, then default
 	host := mcpHost
 	if host == "localhost" {
 		if envHost := os.Getenv("HOST"); envHost != "" {
@@ -95,7 +84,6 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Determine port: use flag value, then PORT env var, then default
 	port := mcpPort
 	if envPort := os.Getenv("PORT"); envPort != "" {
 		if p, err := strconv.Atoi(envPort); err == nil {
@@ -103,55 +91,25 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Get Secret Manager project from env if not set via flag
-	secretProject := mcpSecretProject
-	if secretProject == "" {
-		secretProject = os.Getenv("SECRET_PROJECT")
-		if secretProject == "" {
-			secretProject = os.Getenv("PROJECT_ID")
-		}
-	}
-
-	// Get Secret Manager secret name from env if not set via flag
-	secretName := mcpSecretName
-	if secretName == "" {
-		secretName = os.Getenv("SECRET_NAME")
-	}
-
-	// Get base URL from env if not set via flag
 	baseURL := mcpBaseURL
 	if baseURL == "" {
 		baseURL = os.Getenv("BASE_URL")
 	}
 
-	// Get environment from env if not set via flag
 	environment := mcpEnvironment
 	if environment == "" {
 		environment = os.Getenv("ENVIRONMENT")
 	}
 
-	// Build default base URL if not set
 	if baseURL == "" {
 		baseURL = fmt.Sprintf("http://%s:%d", host, port)
 	}
 
-	// Get Firestore database from env
-	firestoreDatabase := os.Getenv("FIRESTORE_DATABASE")
-
-	// Get KMS key name from env
-	kmsKeyName := os.Getenv("KMS_KEY_NAME")
-
-	// Create MCP server configuration
 	cfg := &mcpserver.Config{
-		Host:              host,
-		Port:              port,
-		BaseURL:           baseURL,
-		SecretName:        secretName,
-		SecretProject:     secretProject,
-		CredentialFile:    mcpCredentialFile,
-		Environment:       environment,
-		FirestoreDatabase: firestoreDatabase,
-		KmsKeyName:        kmsKeyName,
+		Host:        host,
+		Port:        port,
+		BaseURL:     baseURL,
+		Environment: environment,
 	}
 
 	server := mcpserver.NewServer(cfg)

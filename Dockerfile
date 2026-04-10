@@ -1,61 +1,25 @@
-ARG GO_VERSION=1.26
-ARG GO_BIN
-ARG HAS_INTERNAL=no
-ARG HAS_DATA=no
+FROM golang:1.26-alpine AS builder
 
-# --- Base image with user setup ---
-FROM golang:${GO_VERSION}-alpine AS prebuild
+RUN apk add --no-cache git ca-certificates
 
-ENV USER=appuser
-ENV UID=10001
-
-RUN apk update && apk add --no-cache git ca-certificates \
-    && adduser \
-    --disabled-password \
-    --gecos "" \
-    --home "/nonexistent" \
-    --shell "/sbin/nologin" \
-    --no-create-home \
-    --uid "${UID}" \
-    "${USER}"
-
-# --- Conditional internal/ directory ---
-FROM prebuild AS build_yes
-ONBUILD COPY internal/ /build/internal
-
-FROM prebuild AS build_no
-ONBUILD RUN mkdir -p /build/internal
-
-# --- Build stage ---
-FROM build_${HAS_INTERNAL} AS build
-ARG GO_BIN
-COPY go.mod go.sum /build/
-COPY cmd/ /build/cmd/
-WORKDIR /build
+WORKDIR /app
+COPY go.mod go.sum ./
 RUN go mod download
-RUN go mod verify
-ARG TARGETOS TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags="-w -s" -o /go/bin/app ./cmd/${GO_BIN}
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-s -w" \
+    -o /lastpass-mcp \
+    ./cmd/lastpass-mcp
 
-# --- Conditional data/ directory ---
-FROM build AS data_yes
-ONBUILD COPY data/ /data
-
-FROM build AS data_no
-ONBUILD RUN mkdir -p /data
-
-FROM data_${HAS_DATA} AS runner
-
-# --- Final minimal image ---
-FROM scratch
-
-COPY --from=runner /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=runner /etc/passwd /etc/group /etc/
-COPY --from=runner /go/bin/app /go/bin/app
-COPY --from=runner /data /data
-
-USER appuser:appuser
-
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates tzdata
+RUN adduser -D -g '' appuser
+WORKDIR /app
+COPY --from=builder /lastpass-mcp /app/lastpass-mcp
+COPY --from=builder /app/internal/mcp/templates /app/internal/mcp/templates
+RUN chown -R appuser:appuser /app
+USER appuser
 EXPOSE 8080
-
-ENTRYPOINT ["/go/bin/app"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+ENTRYPOINT ["/app/lastpass-mcp", "mcp"]

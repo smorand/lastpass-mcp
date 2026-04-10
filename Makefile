@@ -601,3 +601,36 @@ terraform-help:
 	@echo "  make configure-docker-auth - Manually configure Docker registry auth"
 	@echo ""
 	@echo "Note: You must run 'make init-deploy' BEFORE running 'make deploy'"
+
+
+# ============================================
+# VPS Deployment
+# ============================================
+
+VPS_HOST ?= root@31.97.54.67
+VPS_MANAGEMENT_DIR ?= /app/vps-management
+VPS_APP_NAME ?= lastpass-mcp
+VPS_ENDPOINT ?= lastpass.mcp.scm-platform.org:8080
+VPS_GIT_ORG ?= smorand
+VPS_GIT_REPO ?= lastpass-mcp
+
+deploy-vps:
+ifndef TAG
+	@echo "Error: TAG is required."
+	@echo "Usage: make deploy-vps TAG=v1.0.0"
+	@exit 1
+endif
+	@echo "Deploying $(VPS_APP_NAME) $(TAG) to VPS..."
+	@echo "1. Pushing tag $(TAG)..."
+	@git tag -f $(TAG) && git push origin $(TAG) --force
+	@echo "2. Running vps-deploy on $(VPS_HOST)..."
+	@ssh $(VPS_HOST) "cd $(VPS_MANAGEMENT_DIR) && \
+		./scripts/vps-undeploy.sh $(VPS_APP_NAME) 2>/dev/null; \
+		./scripts/vps-deploy.sh $(VPS_GIT_ORG)/$(VPS_GIT_REPO)@$(TAG) prod $(VPS_ENDPOINT) ./environments"
+	@echo "Deploy complete! Verify with:"
+	@echo "  curl https://lastpass.mcp.scm-platform.org/health"
+
+undeploy-vps:
+	@echo "Undeploying $(VPS_APP_NAME) from VPS..."
+	@ssh $(VPS_HOST) "cd $(VPS_MANAGEMENT_DIR) && ./scripts/vps-undeploy.sh $(VPS_APP_NAME)"
+	@echo "Undeploy complete. Data preserved in /app/data/$(VPS_APP_NAME)/"
