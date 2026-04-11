@@ -17,7 +17,7 @@ RUN adduser -D -g '' appuser
 WORKDIR /app
 COPY --from=builder /lastpass-mcp /app/lastpass-mcp
 COPY --from=builder /app/internal/mcp/templates /app/internal/mcp/templates
-RUN chown -R appuser:appuser /app
+RUN mkdir -p /data && chown -R appuser:appuser /app /data
 USER appuser
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
