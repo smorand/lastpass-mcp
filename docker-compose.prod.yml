@@ -7,6 +7,8 @@ services:
       - "8080"
     env_file:
       - /app/data/lastpass-mcp/.env
+    volumes:
+      - /app/data/lastpass-mcp/state:/data
     networks:
       - proxy-network
 

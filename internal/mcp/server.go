@@ -57,6 +57,7 @@ type Config struct {
 	Port        int
 	BaseURL     string
 	Environment string
+	DataDir     string
 }
 
 // Server wraps the MCP server and HTTP server.
@@ -688,8 +689,29 @@ func (s *Server) Run(ctx context.Context) error {
 		BaseURL: s.config.BaseURL,
 	})
 
-	// In-memory persistence (sessions lost on restart)
-	s.oauth2Server.SetPersistence(&NoOpPersistence{})
+	// Set up persistence
+	var persistence Persistence
+	if s.config.DataDir != "" {
+		fp, err := NewFilePersistence(s.config.DataDir)
+		if err != nil {
+			return fmt.Errorf("initializing file persistence: %w", err)
+		}
+		defer fp.Close()
+		if err := fp.Load(ctx, s.oauth2Server); err != nil {
+			return fmt.Errorf("loading persisted state: %w", err)
+		}
+		persistence = fp
+		slog.Info("file persistence enabled", "data_dir", s.config.DataDir)
+	} else {
+		persistence = &NoOpPersistence{}
+		slog.Warn("no data directory configured, sessions will be lost on restart")
+	}
+	s.oauth2Server.SetPersistence(persistence)
+
+	// Start persistence save loop in background
+	persistCtx, persistCancel := context.WithCancel(ctx)
+	defer persistCancel()
+	go persistence.RunSaveLoop(persistCtx, s.oauth2Server)
 
 	// Register OAuth2 routes (not protected by auth)
 	s.oauth2Server.SetupRoutes(mux)

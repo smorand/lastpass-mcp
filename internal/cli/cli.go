@@ -18,6 +18,7 @@ var (
 	mcpHost        string
 	mcpBaseURL     string
 	mcpEnvironment string
+	mcpDataDir     string
 )
 
 // rootCmd is the root command for the CLI.
@@ -72,6 +73,7 @@ func init() {
 	mcpCmd.Flags().StringVarP(&mcpHost, "host", "H", "localhost", "Host to bind to")
 	mcpCmd.Flags().StringVar(&mcpBaseURL, "base-url", "", "Base URL for OAuth callbacks (e.g., https://lastpass.mcp.scm-platform.org)")
 	mcpCmd.Flags().StringVar(&mcpEnvironment, "environment", "", "Environment (dev, stg, prd)")
+	mcpCmd.Flags().StringVar(&mcpDataDir, "data-dir", "", "Directory for persistent state (OAuth clients, tokens)")
 
 	rootCmd.AddCommand(mcpCmd)
 }
@@ -101,6 +103,11 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		environment = os.Getenv("ENVIRONMENT")
 	}
 
+	dataDir := mcpDataDir
+	if dataDir == "" {
+		dataDir = os.Getenv("DATA_DIR")
+	}
+
 	if baseURL == "" {
 		baseURL = fmt.Sprintf("http://%s:%d", host, port)
 	}
@@ -110,6 +117,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		Port:        port,
 		BaseURL:     baseURL,
 		Environment: environment,
+		DataDir:     dataDir,
 	}
 
 	server := mcpserver.NewServer(cfg)
