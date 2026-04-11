@@ -51,6 +51,7 @@ var allowedRedirectHosts = []struct {
 	{"http", "localhost:3000"},
 	{"http", "127.0.0.1:8000"},
 	{"http", "127.0.0.1:3000"},
+	{"https", "claude.ai:443"},
 }
 
 // allowedExactRedirectURIs defines exact match redirect URIs for production callbacks.
