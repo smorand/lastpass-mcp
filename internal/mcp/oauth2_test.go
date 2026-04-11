@@ -564,7 +564,7 @@ func TestHandleAuthorizeGet(t *testing.T) {
 		}
 	})
 
-	t.Run("unregistered client", func(t *testing.T) {
+	t.Run("unregistered client with allowed redirect_uri is auto-registered", func(t *testing.T) {
 		t.Parallel()
 		s := newTestOAuth2Server()
 
@@ -580,14 +580,38 @@ func TestHandleAuthorizeGet(t *testing.T) {
 
 		s.HandleAuthorize(w, req)
 
-		if w.Code != http.StatusUnauthorized {
-			t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+		// Should succeed and render the login page (auto-registration)
+		if w.Code != http.StatusOK {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 		}
 
-		var errResp TokenErrorResponse
-		_ = json.Unmarshal(w.Body.Bytes(), &errResp)
-		if errResp.Error != "invalid_client" {
-			t.Errorf("error = %q, want %q", errResp.Error, "invalid_client")
+		// Client should now be registered
+		s.mu.RLock()
+		_, exists := s.clients["unknown-client"]
+		s.mu.RUnlock()
+		if !exists {
+			t.Error("client should have been auto-registered")
+		}
+	})
+
+	t.Run("unregistered client with disallowed redirect_uri is rejected", func(t *testing.T) {
+		t.Parallel()
+		s := newTestOAuth2Server()
+
+		q := url.Values{
+			"client_id":             {"unknown-client"},
+			"redirect_uri":          {"https://evil.com/callback"},
+			"response_type":         {"code"},
+			"code_challenge":        {"challenge123"},
+			"code_challenge_method": {"S256"},
+		}
+		req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?"+q.Encode(), nil)
+		w := httptest.NewRecorder()
+
+		s.HandleAuthorize(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
 		}
 	})
 

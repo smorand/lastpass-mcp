@@ -447,17 +447,34 @@ func (s *OAuth2Server) handleAuthorizeGet(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Validate client is registered (no auto-registration)
-	s.mu.RLock()
-	client, exists := s.clients[clientID]
-	s.mu.RUnlock()
-
-	if !exists {
-		writeOAuthError(w, "invalid_client", "Client not registered. Use /oauth/register first.", http.StatusUnauthorized)
+	// Validate redirect_uri is in the server allowlist
+	if !isRedirectURIAllowed(redirectURI) {
+		writeOAuthError(w, "invalid_request", "redirect_uri is not allowed", http.StatusBadRequest)
 		return
 	}
 
-	// Validate redirect_uri is in client's registered list (no auto-addition)
+	// Look up or auto-register client.
+	// Some MCP clients (e.g. Claude.ai) skip Dynamic Client Registration
+	// and send their own client_id directly to /oauth/authorize.
+	s.mu.Lock()
+	client, exists := s.clients[clientID]
+	if !exists {
+		client = &RegisteredClient{
+			ClientID:     clientID,
+			ClientSecret: generateSecureToken(tokenSecretLength),
+			RedirectURIs: []string{redirectURI},
+			CreatedAt:    time.Now(),
+		}
+		s.clients[clientID] = client
+		slog.Info("auto-registered OAuth client on authorize", "client_id", clientID)
+	}
+	s.mu.Unlock()
+
+	if !exists {
+		s.requestSave()
+	}
+
+	// Validate redirect_uri is in client's registered list
 	validRedirect := false
 	for _, uri := range client.RedirectURIs {
 		if uri == redirectURI {
