@@ -9,6 +9,11 @@ services:
       - /app/data/lastpass-mcp/.env
     volumes:
       - /app/data/lastpass-mcp/state:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - proxy-network
 

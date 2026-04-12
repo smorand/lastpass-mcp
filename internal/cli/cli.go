@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	mcpserver "lastpass-mcp/internal/mcp"
+	"lastpass-mcp/internal/observability"
 )
 
 // MCP server command flags
@@ -79,6 +80,8 @@ func init() {
 }
 
 func runMCP(cmd *cobra.Command, args []string) error {
+	observability.InitLogger(os.Getenv("LOG_LEVEL"))
+
 	host := mcpHost
 	if host == "localhost" {
 		if envHost := os.Getenv("HOST"); envHost != "" {
